@@ -1,6 +1,7 @@
 # importing each engine registers it
 from . import libr_chiller_engine
 from . import gpu_cassette
+from . import gt_system_v2
 
 # auto-load every module in engines/drafts/ so drafts survive app restarts
 import importlib

@@ -122,9 +122,11 @@ def results_table(engine, r):
 
 
 def chart_src(engine, r):
-    d = tempfile.mkdtemp(); p = os.path.join(d, "c.png")
+    fmt = getattr(engine, "chart_format", "png")
+    d = tempfile.mkdtemp(); p = os.path.join(d, f"c.{fmt}")
     build_chart(engine, r, p)
-    return "data:image/png;base64," + base64.b64encode(open(p, "rb").read()).decode()
+    mime = "image/svg+xml" if fmt == "svg" else "image/png"
+    return f"data:{mime};base64," + base64.b64encode(open(p, "rb").read()).decode()
 
 
 def build_smart_section(engine, v, r):
