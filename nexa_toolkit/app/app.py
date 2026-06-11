@@ -117,24 +117,49 @@ def _convergence_status(r):
     return getattr(solved, "convergence", None) if solved is not None else None
 
 
-def convergence_banner(r):
-    """Convergence summary line for the banner area. Empty Div if no info."""
+def convergence_card(r):
+    """Dedicated convergence-status card shown after every Run. Renders nothing
+    for engines that don't return a SolvedSystem (v1 path) so layout is stable."""
     from nexablock.core.convergence import convergence_summary
     conv = _convergence_status(r)
     if conv is None:
         return html.Div()
     text, ok = convergence_summary(conv)
-    color = "#2E7D4E" if ok else RED
-    parts = [html.Div(f"Convergence: {text}",
-                      style={"fontSize": "12px", "fontWeight": "600",
-                             "color": color, "marginBottom": "6px"})]
-    if not ok:
-        parts.append(html.Div(
-            "⚠ NOT CONVERGED — KPIs below may be unreliable.",
-            style={"fontSize": "13px", "fontWeight": "700", "color": "white",
-                   "background": RED, "padding": "8px 12px",
-                   "borderRadius": "6px", "marginBottom": "8px"}))
-    return html.Div(parts)
+    GREEN = "#2E7D4E"
+
+    if ok:
+        # Single-row green card, full width.
+        return html.Div([
+            html.Span("✓ ", style={"fontWeight": "800", "fontSize": "16px", "color": GREEN}),
+            html.Span("Converged",
+                      style={"fontWeight": "700", "fontSize": "14px", "color": GREEN,
+                             "marginRight": "10px"}),
+            html.Span(text, style={"fontSize": "13px", "color": INK}),
+        ], style={
+            "background": "#EAF7EE", "border": f"1px solid {GREEN}",
+            "borderRadius": "8px", "padding": "10px 14px",
+            "marginBottom": "14px",
+            "display": "flex", "alignItems": "center", "flexWrap": "wrap",
+        })
+
+    # Non-converged: louder, multi-line, names the loop and the reason.
+    bad = next(L for L in conv.loops if not L.converged)
+    return html.Div([
+        html.Div([
+            html.Span("⚠ ", style={"fontWeight": "800", "fontSize": "18px"}),
+            html.Span("NOT CONVERGED",
+                      style={"fontWeight": "800", "fontSize": "15px", "letterSpacing": "0.5px"}),
+        ], style={"marginBottom": "6px"}),
+        html.Div(text, style={"fontSize": "13px", "fontWeight": "600", "marginBottom": "4px"}),
+        html.Div(f"Reason: {bad.reason or 'unknown'}",
+                 style={"fontSize": "12px", "opacity": "0.95", "marginBottom": "4px"}),
+        html.Div("KPIs below may be unreliable.",
+                 style={"fontSize": "12px", "fontStyle": "italic", "opacity": "0.9"}),
+    ], style={
+        "background": RED, "color": "white",
+        "borderRadius": "8px", "padding": "12px 16px",
+        "marginBottom": "14px",
+    })
 
 
 def results_table(engine, r):
@@ -499,6 +524,7 @@ app.layout = html.Div([
         html.Div([
             html.Div(id="status-bar"),
             html.Div(id="banner"),
+            html.Div(id="conv-status"),       # convergence card (per-Run, persistent across study clicks)
             html.Div(id="highlights"),
             html.Div([
                 dcc.Loading(type="circle", color=TEAL,
@@ -651,6 +677,7 @@ def _material_select(mat_val):
     Output("highlights", "children"), Output("results", "children"),
     Output("chart", "src"), Output("last", "data"), Output("banner", "children"),
     Output("status-bar", "children"), Output("smart-section", "children"),
+    Output("conv-status", "children"),
     Input("run", "n_clicks"), Input("system", "value"),
     State({"type": "sysin", "key": ALL}, "value"), State({"type": "sysin", "key": ALL}, "id"))
 def _run(_n, key, values, ids):
@@ -660,16 +687,17 @@ def _run(_n, key, values, ids):
     else:
         vals = engine.defaults()
     r = engine.solve(vals)
-    # Banner can carry up to two stripes: draft notice (if any) + convergence status.
-    banner_parts = []
+    # Draft-tool notice (if any) goes into the multi-purpose banner; convergence
+    # status gets its own dedicated card below so it's not clobbered when the
+    # study buttons write into banner.
+    banner = None
     if engine.status == "draft":
-        banner_parts.append(html.Div(
+        banner = html.Div(
             "Draft tool - generated skeleton, logic not filled, outputs unverified. "
             "Edit it through Request a tool, then verify and promote.",
             style={"background": "#FDEEEC", "border": f"1px solid {RED}", "color": RED,
-                   "padding": "10px 14px", "borderRadius": "8px", "marginBottom": "14px", "fontSize": "13px"}))
-    banner_parts.append(convergence_banner(r))
-    banner = html.Div(banner_parts) if banner_parts else None
+                   "padding": "10px 14px", "borderRadius": "8px", "marginBottom": "14px", "fontSize": "13px"})
+    conv_status = convergence_card(r)
     status_bar = html.Div([
         html.Span("\u2713  ", style={"fontWeight": "700"}),
         html.Span(f"Calculation complete \u2014 {engine.name}"),
@@ -678,7 +706,7 @@ def _run(_n, key, values, ids):
               "color": TEAL, "fontWeight": "600"})
     return (highlight_cards(engine, r), results_table(engine, r), chart_src(engine, r),
             {"key": key, "vals": vals}, banner, status_bar,
-            build_smart_section(engine, vals, r))
+            build_smart_section(engine, vals, r), conv_status)
 
 
 @app.callback(Output("modal", "style"),
