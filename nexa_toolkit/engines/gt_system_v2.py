@@ -23,6 +23,29 @@ from simulators.gt_system.system  import GTSystemParams, build_gt_system, summar
 from nexablock.viz.svg            import render as render_svg
 
 
+def _params_from(v: dict) -> GTSystemParams:
+    """Build a GTSystemParams from the v1 UI input dict. Shared with subclasses."""
+    return GTSystemParams(
+        p_rated_kW   = float(v["p_rated_kW"]),
+        load_pct     = float(v["load_pct"]),
+        gt_eff       = float(v["gt_eff"]),
+        t_ambient_C  = float(v["t_ambient_C"]),
+        t_exhaust_C  = float(v["t_exhaust_C"]),
+        hrsg_eff_pct = float(v["hrsg_eff_pct"]),
+        steam_p_bar  = float(v["steam_p_bar"]),
+        fw_t_C       = float(v["fw_t_C"]),
+        libr_frac    = float(v["libr_frac"]),
+        libr_cop     = float(v["libr_cop"]),
+        chw_sup_C    = float(v["chw_sup_C"]),
+        chw_dt_K     = float(v["chw_dt_K"]),
+        gpu_it_kW    = float(v["gpu_it_kW"]),
+        gpu_pue      = float(v["gpu_pue"]),
+        med_effects  = int(v["med_effects"]),
+        sw_t_C       = float(v["sw_t_C"]),
+        t_wb_C       = float(v["t_wb_C"]),
+    )
+
+
 @register
 class GTSystemV2(Engine):
     key          = "gt_system_v2"
@@ -59,26 +82,7 @@ class GTSystemV2(Engine):
     ]
 
     def solve(self, v: dict) -> dict:
-        p = GTSystemParams(
-            p_rated_kW   = float(v["p_rated_kW"]),
-            load_pct     = float(v["load_pct"]),
-            gt_eff       = float(v["gt_eff"]),
-            t_ambient_C  = float(v["t_ambient_C"]),
-            t_exhaust_C  = float(v["t_exhaust_C"]),
-            hrsg_eff_pct = float(v["hrsg_eff_pct"]),
-            steam_p_bar  = float(v["steam_p_bar"]),
-            fw_t_C       = float(v["fw_t_C"]),
-            libr_frac    = float(v["libr_frac"]),
-            libr_cop     = float(v["libr_cop"]),
-            chw_sup_C    = float(v["chw_sup_C"]),
-            chw_dt_K     = float(v["chw_dt_K"]),
-            gpu_it_kW    = float(v["gpu_it_kW"]),
-            gpu_pue      = float(v["gpu_pue"]),
-            med_effects  = int(v["med_effects"]),
-            sw_t_C       = float(v["sw_t_C"]),
-            t_wb_C       = float(v["t_wb_C"]),
-        )
-        solved = build_gt_system(p)
+        solved = build_gt_system(_params_from(v))
         return {"solved": solved, "kpis": summary(solved)}
 
     def outputs(self, r: dict) -> list:

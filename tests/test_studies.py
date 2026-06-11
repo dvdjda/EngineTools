@@ -310,5 +310,118 @@ def test_diff_vs_base_zero_for_empty_overrides(runner):
     assert diffs["identity"] == pytest.approx(0.0, abs=1e-9)
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# §7.9 — Chart helpers
+# ══════════════════════════════════════════════════════════════════════════════
+
+import matplotlib.pyplot as _plt
+from nexablock.studies.charts import (
+    tornado_chart, sweep_chart, scenarios_chart, sweep_contour,
+    _tornado_figure, _sweep_figure, _scenarios_figure,
+)
+
+_PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+
+
+def _assert_valid_png(path):
+    with open(path, "rb") as f:
+        head = f.read(8)
+    assert head == _PNG_MAGIC, f"not a PNG: header={head!r}"
+    assert os.path.getsize(path) > 1024, f"PNG too small: {os.path.getsize(path)} bytes"
+
+
+# ── tornado ──────────────────────────────────────────────────────────────────
+
+def test_tornado_chart_writes_png(sens, tmp_path):
+    p = tmp_path / "tornado.png"
+    tornado_chart(sens, str(p), kpi="MED water m3day")
+    _assert_valid_png(p)
+
+
+def test_tornado_figure_one_bar_per_input(sens):
+    """sens fixture varies 7 inputs → 7 bars per KPI tornado."""
+    fig = _tornado_figure(sens, kpi="MED water m3day")
+    try:
+        ax = fig.axes[0]
+        assert len(ax.patches) == 7, f"expected 7 bars, got {len(ax.patches)}"
+    finally:
+        _plt.close(fig)
+
+
+def test_tornado_top_n_truncates(sens):
+    fig = _tornado_figure(sens, kpi="MED water m3day", top_n=3)
+    try:
+        ax = fig.axes[0]
+        assert len(ax.patches) == 3
+    finally:
+        _plt.close(fig)
+
+
+# ── sweep ────────────────────────────────────────────────────────────────────
+
+def test_sweep_chart_writes_png(load_sweep, tmp_path):
+    p = tmp_path / "sweep.png"
+    sweep_chart(load_sweep, str(p),
+                kpis=["Steam generation t/h", "MED water m3day"])
+    _assert_valid_png(p)
+
+
+def test_sweep_figure_one_line_per_kpi(load_sweep):
+    kpis = ["Steam generation t/h", "MED water m3day", "GT actual power kW"]
+    fig = _sweep_figure(load_sweep, kpis=kpis)
+    try:
+        ax = fig.axes[0]
+        assert len(ax.lines) == len(kpis)
+    finally:
+        _plt.close(fig)
+
+
+def test_sweep_chart_2d_raises(base):
+    sweep = ParameterSweep(build_gt_system, base, summary)
+    r2d   = sweep.run({"load_pct": [70, 90], "libr_frac": [0.3, 0.7]})
+    with pytest.raises(ValueError, match="1-D only"):
+        _sweep_figure(r2d, kpis=["Steam generation t/h"])
+
+
+# ── scenarios ────────────────────────────────────────────────────────────────
+
+def test_scenarios_chart_writes_png(scenarios_result, tmp_path):
+    p = tmp_path / "scenarios.png"
+    scenarios_chart(scenarios_result, str(p),
+                    kpis=["Steam generation t/h", "MED water m3day"])
+    _assert_valid_png(p)
+
+
+def test_scenarios_figure_has_expected_bars(scenarios_result):
+    """2 scenarios × 3 KPIs = 6 bars."""
+    kpis = ["Steam generation t/h", "MED water m3day", "GT actual power kW"]
+    fig  = _scenarios_figure(scenarios_result, kpis=kpis)
+    try:
+        ax = fig.axes[0]
+        assert len(ax.patches) == 2 * len(kpis)
+    finally:
+        _plt.close(fig)
+
+
+# ── 2-D contour placeholder ──────────────────────────────────────────────────
+
+def test_sweep_contour_not_implemented(load_sweep, tmp_path):
+    with pytest.raises(NotImplementedError, match="contour"):
+        sweep_contour(load_sweep, str(tmp_path / "x.png"), kpi="any")
+
+
+# ── engine wiring: GT load-sweep screening shows the chart in the chart slot ─
+
+def test_gt_load_sweep_engine_chart_writes_png(tmp_path):
+    import nexa_toolkit.engines              # noqa: registers
+    from nexa_toolkit.framework import get
+    e = get("gt_system_v2_loadsweep")
+    r = e.solve(e.defaults())
+    p = tmp_path / "gt_load_sweep.png"
+    e.chart(r, str(p))
+    _assert_valid_png(p)
+    assert "sweep" in r and len(r["sweep"].points) == 11   # 50..100 step 5
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

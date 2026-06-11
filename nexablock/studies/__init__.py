@@ -2,9 +2,11 @@
 from .sweep       import ParameterSweep, SweepResult, SweepPoint
 from .sensitivity import OneAtATimeSensitivity, SensitivityResult, SensitivityEntry
 from .scenarios   import Scenario, ScenarioRunner, ScenarioResult, ScenarioPoint
+from .charts      import tornado_chart, sweep_chart, scenarios_chart, sweep_contour
 
 __all__ = [
     "ParameterSweep", "SweepResult", "SweepPoint",
     "OneAtATimeSensitivity", "SensitivityResult", "SensitivityEntry",
     "Scenario", "ScenarioRunner", "ScenarioResult", "ScenarioPoint",
+    "tornado_chart", "sweep_chart", "scenarios_chart", "sweep_contour",
 ]
