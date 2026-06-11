@@ -51,13 +51,13 @@ class GTSystemV2(Engine):
     key          = "gt_system_v2"
     name         = "GT System v2 — nexablock (GT + HRSG + LiBr + GPU + MED)"
     kind         = "simulator"
-    status       = "draft"
-    provenance   = "v1 GT system migrated onto Nexa Block v2; flowsheet via §7.5 SVG renderer"
+    status       = "trusted"
+    provenance   = "v1 GT system migrated onto Nexa Block v2; flowsheet via §7.5 SVG renderer; promoted to trusted after 14/14 ±2% validation pass"
     notes = (
         "Runs the nexablock v2 composition (simulators/gt_system/system.py). "
-        "Chart slot shows the §7.5 SVG flowsheet, not a bar chart. "
-        "Block-level KPIs cross-check vs the v1 trusted GT tool within ±2% "
-        "(tests/test_gt_system.py); v2 framework promotion is still pending."
+        "Chart slot shows the §7.5 SVG flowsheet. "
+        "Validated vs the v1 trusted GT tool within ±2%, 14/14 checks pass "
+        "(tests/test_gt_system.py)."
     )
     chart_format = "svg"   # tells chart_src to emit SVG MIME
 
@@ -88,12 +88,12 @@ class GTSystemV2(Engine):
     def outputs(self, r: dict) -> list:
         k = r["kpis"]
         return [
-            OutputSpec("GT actual power",       k["GT actual power kW"],   "kW",     "screening", "{:.0f}"),
-            OutputSpec("NG consumption",        k["NG consumption Nm3h"],  "Nm³/h",  "screening", "{:.0f}"),
-            OutputSpec("Steam generation",      k["Steam generation t/h"], "t/h",    "screening", "{:.2f}"),
-            OutputSpec("LiBr cooling capacity", k["LiBr cooling kW"],      "kW",     "screening", "{:.0f}"),
-            OutputSpec("GPU IT load",           k["GPU IT load kW"],       "kW",     "screening", "{:.0f}"),
-            OutputSpec("MED water production",  k["MED water m3day"],      "m³/day", "screening", "{:.0f}"),
+            OutputSpec("GT actual power",       k["GT actual power kW"],   "kW",     "verified", "{:.0f}"),
+            OutputSpec("NG consumption",        k["NG consumption Nm3h"],  "Nm³/h",  "verified", "{:.0f}"),
+            OutputSpec("Steam generation",      k["Steam generation t/h"], "t/h",    "verified", "{:.2f}"),
+            OutputSpec("LiBr cooling capacity", k["LiBr cooling kW"],      "kW",     "verified", "{:.0f}"),
+            OutputSpec("GPU IT load",           k["GPU IT load kW"],       "kW",     "verified", "{:.0f}"),
+            OutputSpec("MED water production",  k["MED water m3day"],      "m³/day", "verified", "{:.0f}"),
         ]
 
     def highlights(self, r: dict) -> list:

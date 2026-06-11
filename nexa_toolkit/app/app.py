@@ -462,7 +462,7 @@ app.layout = html.Div([
         html.Div([
             html.Label("System", style={"fontSize": "13px", "color": GREY, "fontWeight": "600"}),
             dcc.Dropdown(id="system", clearable=False, options=build_options(),
-                         value=list_engines()[0][0], style={"marginBottom": "16px", "marginTop": "6px"}),
+                         value="gt_system_v2", style={"marginBottom": "16px", "marginTop": "6px"}),
             html.Div(id="inputs"),
             _btn("Run", "run", primary=True),
         ], style={**CARD, "width": "300px", "alignSelf": "flex-start"}),

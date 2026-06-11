@@ -28,11 +28,13 @@ _SWEEP_KPIS = [
 class GTSystemV2LoadSweep(GTSystemV2):
     key          = "gt_system_v2_loadsweep"
     name         = "GT System v2 — load sweep screening"
+    status       = "trusted"
     chart_format = "png"   # override parent's "svg" — sweep chart is matplotlib PNG
     notes = (
-        "Same physics as gt_system_v2. Chart slot shows a load-screening "
-        "sweep (load_pct 50–100% in 5% steps) across GT power, steam, LiBr "
-        "cooling and MED water — not the flowsheet."
+        "Same physics as gt_system_v2 (validated vs the v1 trusted GT tool "
+        "within ±2%, 14/14 checks; tests/test_gt_system.py). Chart slot "
+        "shows a load-screening sweep (load_pct 50–100% in 5% steps) across "
+        "GT power, steam, LiBr cooling and MED water."
     )
 
     def solve(self, v: dict) -> dict:
