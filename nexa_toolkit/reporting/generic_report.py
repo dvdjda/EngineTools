@@ -47,6 +47,60 @@ def _parse_ai_sections(ai_text):
 
 
 # ---------- chart ----------
+def write_study_sheet(wb, study, sheet_name: str = "Study", image_anchor: str = "A3",
+                      table_start_row: int = 24):
+    """Add a Study sheet to `wb`: navy banner + embedded chart + table.
+
+    Shared by build_excel(..., study=...) and the standalone study_to_xlsx
+    in nexa_toolkit.reporting.study_export — one source of truth for what
+    a "study sheet" looks like.
+
+    Returns the worksheet.
+    """
+    from openpyxl.styles import Font, PatternFill, Alignment
+    ws = wb.create_sheet(sheet_name)
+    ws["A1"] = study.get("label") or "Study"
+    ws["A1"].font = Font(name="Arial", bold=True, size=12, color="FFFFFF")
+    ws["A1"].fill = PatternFill("solid", fgColor=HEX_NAVY)
+    ws["A1"].alignment = Alignment(vertical="center", indent=1)
+    ws.column_dimensions["A"].width = 22
+    for col in "BCDEFGHIJKLMN":
+        ws.column_dimensions[col].width = 16
+
+    # Chart (PNG written next to the workbook path)
+    try:
+        # The png is written to a temp file with a stable name so concurrent
+        # exports don't collide.
+        import tempfile
+        study_png = os.path.join(tempfile.mkdtemp(), f"{sheet_name}.png")
+        _render_study_chart(study, study_png)
+        from openpyxl.drawing.image import Image as XImage
+        ws.add_image(XImage(study_png), image_anchor)
+    except Exception as _e:
+        ws[image_anchor] = f"Study chart omitted: {_e}"
+
+    # Table from result.as_dataframe(). Pandas may be absent.
+    ws.cell(table_start_row, 1, "Study data").font = Font(bold=True)
+    try:
+        df = study["result"].as_dataframe()
+        if getattr(df.index, "name", None) or df.index.dtype == object:
+            df = df.reset_index().rename(columns={"index": "scenario"})
+        headers = [str(c) for c in df.columns]
+        for j, h in enumerate(headers):
+            ws.cell(table_start_row + 1, j + 1, h).font = Font(bold=True)
+        for i, row in enumerate(df.values.tolist()):
+            for j, val in enumerate(row):
+                if isinstance(val, float) and (val != val):     # NaN
+                    ws.cell(table_start_row + 2 + i, j + 1, None)
+                else:
+                    ws.cell(table_start_row + 2 + i, j + 1, val)
+    except ImportError:
+        ws.cell(table_start_row + 1, 1, "table omitted: pandas not installed")
+    except Exception as _e:
+        ws.cell(table_start_row + 1, 1, f"table omitted: {_e}")
+    return ws
+
+
 def _render_study_chart(study, path):
     """Dispatch to the matching nexablock.studies chart helper.
 
@@ -202,48 +256,9 @@ def build_excel(engine, values, result, path, ai_text=None, study=None):
             if c.value is not None and (not c.font or c.font.name != "Arial"):
                 f = c.font
                 c.font = Font(name="Arial", bold=f.bold, italic=f.italic, size=f.size, color=f.color)
-    # Optional Study sheet — embed the study chart + the underlying table.
+    # Optional Study sheet — single source of truth in write_study_sheet.
     if study is not None:
-        ws_s = wb.create_sheet("Study")
-        ws_s["A1"] = study.get("label") or "Study"
-        ws_s["A1"].font = Font(name="Arial", bold=True, size=12, color="FFFFFF")
-        ws_s["A1"].fill = PatternFill("solid", fgColor=HEX_NAVY)
-        ws_s["A1"].alignment = Alignment(vertical="center", indent=1)
-        ws_s.column_dimensions["A"].width = 22
-        for col in "BCDEFGHIJKLMN":
-            ws_s.column_dimensions[col].width = 16
-
-        # Render the study chart (reuses nexablock.studies.charts) and embed.
-        try:
-            study_png = path + ".study.png"
-            _render_study_chart(study, study_png)
-            from openpyxl.drawing.image import Image as XImage
-            ws_s.add_image(XImage(study_png), "A3")
-        except Exception as _e:
-            ws_s["A3"] = f"Study chart omitted: {_e}"
-
-        # Table from result.as_dataframe(); pandas may not be installed.
-        table_start_row = 24                       # leaves room for the image
-        ws_s.cell(table_start_row, 1, "Study data").font = Font(bold=True)
-        try:
-            df = study["result"].as_dataframe()
-            if getattr(df.index, "name", None) or df.index.dtype == object:
-                df = df.reset_index().rename(columns={"index": "scenario"})
-            headers = [str(c) for c in df.columns]
-            for j, h in enumerate(headers):
-                cell = ws_s.cell(table_start_row + 1, j + 1, h)
-                cell.font = Font(bold=True)
-            for i, row in enumerate(df.values.tolist()):
-                for j, val in enumerate(row):
-                    if isinstance(val, float) and (val != val):     # NaN
-                        ws_s.cell(table_start_row + 2 + i, j + 1, None)
-                    else:
-                        ws_s.cell(table_start_row + 2 + i, j + 1, val)
-        except ImportError:
-            ws_s.cell(table_start_row + 1, 1,
-                      "table omitted: pandas not installed")
-        except Exception as _e:
-            ws_s.cell(table_start_row + 1, 1, f"table omitted: {_e}")
+        write_study_sheet(wb, study)
 
     wb.save(path)
     return path

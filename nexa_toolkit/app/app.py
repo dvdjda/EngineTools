@@ -25,9 +25,14 @@ from nexa_toolkit.framework import list_engines, get, REGISTRY
 from nexa_toolkit.framework.builder import save_request, scaffold_tool, _slug, load_kinds, add_kind
 from nexa_toolkit.reporting.generic_report import (
     build_chart, build_excel, build_pdf, build_pptx)
+from nexa_toolkit.reporting.study_export import study_to_csv, study_to_xlsx
 from nexablock.studies import (
     ParameterSweep, OneAtATimeSensitivity, ScenarioRunner,
     tornado_chart, sweep_chart, scenarios_chart)
+import dataclasses as _dc
+import datetime as _dt
+import pathlib as _pl
+import pickle as _pk
 try:
     from nexa_toolkit.dwsim_export import build_flowsheet as _dwsim_build_flowsheet
 except Exception:
@@ -500,6 +505,26 @@ app.layout = html.Div([
                                        "border": f"1px solid {NAVY}"}),
                 ], style={"display": "flex", "alignItems": "center", "flexWrap": "wrap",
                           "gap": "6px"}),
+                html.Div([
+                    html.Div(id="study-status",
+                             style={"fontSize": "12px", "color": GREY,
+                                    "marginRight": "12px", "flex": "1"}),
+                    html.Button("Download Study CSV", id="b-study-csv", n_clicks=0,
+                                style={"padding": "6px 12px", "borderRadius": "6px",
+                                       "fontSize": "12px", "fontWeight": "600",
+                                       "marginRight": "6px", "cursor": "pointer",
+                                       "background": "white", "color": NAVY,
+                                       "border": f"1px solid {NAVY}"}),
+                    html.Button("Download Study Excel", id="b-study-xlsx", n_clicks=0,
+                                style={"padding": "6px 12px", "borderRadius": "6px",
+                                       "fontSize": "12px", "fontWeight": "600",
+                                       "cursor": "pointer",
+                                       "background": "white", "color": NAVY,
+                                       "border": f"1px solid {NAVY}"}),
+                    dcc.Download(id="d-study-csv"), dcc.Download(id="d-study-xlsx"),
+                ], style={"display": "flex", "alignItems": "center",
+                          "marginTop": "12px", "borderTop": f"1px solid {LINE}",
+                          "paddingTop": "10px"}),
             ], style={**CARD, "marginBottom": "16px"}),
             html.Div(id="results", style={**CARD, "marginBottom": "16px"}),
             html.Div(id="smart-section", style={"marginBottom": "16px"}),
@@ -674,10 +699,40 @@ def _ai_explain(_n, data, model):
     return html_div, plain_text
 
 
-# Latest study per engine — populated by the study callbacks below, read by
-# _report when the "Include latest study" checkbox is on. Single-process dev
-# server; ephemeral by design (lost on restart).
+# Latest study per engine. Populated by the three study callbacks; read by
+# the report exporters (when "Include latest study" is on) and by the
+# standalone Study CSV / Excel downloads. Backed by a small pickle file
+# per engine under ~/.enginetools/studies so a server restart doesn't
+# silently drop the user's last run.
 _LATEST_STUDY: dict = {}
+_STUDY_DIR    = _pl.Path.home() / ".enginetools" / "studies"
+
+
+def _save_study_to_disk(engine_key: str, study: dict) -> None:
+    """Best-effort persist; never crashes the request."""
+    try:
+        _STUDY_DIR.mkdir(parents=True, exist_ok=True)
+        with open(_STUDY_DIR / f"{engine_key}_latest.pkl", "wb") as f:
+            _pk.dump(study, f, protocol=_pk.HIGHEST_PROTOCOL)
+    except Exception as e:
+        print(f"[STUDY] disk save failed for {engine_key}: {e}")
+
+
+def _load_studies_from_disk() -> None:
+    """Restore _LATEST_STUDY from any previously saved pickles. Skip bad ones."""
+    if not _STUDY_DIR.is_dir():
+        return
+    for p in _STUDY_DIR.glob("*_latest.pkl"):
+        try:
+            with open(p, "rb") as f:
+                study = _pk.load(f)
+            engine_key = study.get("engine_key") or p.stem.replace("_latest", "")
+            _LATEST_STUDY[engine_key] = study
+        except Exception as e:
+            print(f"[STUDY] could not restore {p.name}: {e}")
+
+
+_load_studies_from_disk()
 
 
 def _report(data, kind, ai_text=None, include_study=False):
@@ -810,13 +865,22 @@ def _run_study(kind: str, data, sweep_input):
         print("[STUDY] ERROR:", _tb.format_exc())
         return no_update, _msg(f"Study failed: {e}", RED)
 
-    # Stash the result so the "Include latest study" report path can find it.
-    _LATEST_STUDY[data["key"]] = {
+    # Stash the result with light metadata so it's self-describing for
+    # report attach AND standalone CSV/Excel downloads. base_params is
+    # converted to a JSON-friendly dict (the dataclass also remains inside
+    # study_result.base_params for in-memory use).
+    stash = {
         "kind":         kind,
         "result":       study_result,
         "chart_kwargs": chart_kwargs,
         "label":        label,
+        "engine_key":   data["key"],
+        "engine_name":  engine.name,
+        "timestamp":    _dt.datetime.now().isoformat(timespec="seconds"),
+        "base_params":  _dc.asdict(params),
     }
+    _LATEST_STUDY[data["key"]] = stash
+    _save_study_to_disk(data["key"], stash)
     return _png_data_uri(p), banner
 
 
@@ -846,6 +910,63 @@ def _on_study_sweep(_n, data, sweep_input):
               prevent_initial_call=True)
 def _on_study_scen(_n, data):
     return _run_study("scenarios", data, None)
+
+
+# ─── Latest-study status + standalone Study CSV / Excel downloads ─────────────
+
+@app.callback(Output("study-status", "children"),
+              Input("system", "value"),
+              Input("b-study-sens",  "n_clicks"),
+              Input("b-study-sweep", "n_clicks"),
+              Input("b-study-scen",  "n_clicks"))
+def _study_status(engine_key, _n1, _n2, _n3):
+    if not engine_key:
+        return "No engine selected."
+    s = _LATEST_STUDY.get(engine_key)
+    if not s:
+        return "No study yet for this engine."
+    return f"Latest study: {s['kind']} · {s.get('timestamp','')}"
+
+
+def _dl_study(data, kind):
+    """Shared logic for the two Download Study buttons."""
+    if not data:
+        return no_update, _msg("Pick an engine and run it first.")
+    s = _LATEST_STUDY.get(data["key"])
+    if not s:
+        return no_update, _msg(
+            "No study yet — click Sensitivity / Sweep / Scenarios first.", RED)
+    d = tempfile.mkdtemp()
+    ext = "csv" if kind == "csv" else "xlsx"
+    p = os.path.join(d, f"{data['key']}_{s['kind']}.{ext}")
+    try:
+        if kind == "csv":
+            study_to_csv(s, p)
+        else:
+            study_to_xlsx(s, p)
+    except Exception as e:
+        import traceback as _tb
+        print("[STUDY DL] ERROR:", _tb.format_exc())
+        return no_update, _msg(f"Study download failed: {e}", RED)
+    return dcc.send_file(p), _msg(f"Study {ext.upper()} downloaded: {s['kind']}", NAVY)
+
+
+@app.callback(Output("d-study-csv", "data"),
+              Output("banner", "children", allow_duplicate=True),
+              Input("b-study-csv", "n_clicks"),
+              State("last", "data"),
+              prevent_initial_call=True)
+def _dl_study_csv(_n, data):
+    return _dl_study(data, "csv")
+
+
+@app.callback(Output("d-study-xlsx", "data"),
+              Output("banner", "children", allow_duplicate=True),
+              Input("b-study-xlsx", "n_clicks"),
+              State("last", "data"),
+              prevent_initial_call=True)
+def _dl_study_xlsx(_n, data):
+    return _dl_study(data, "xlsx")
 
 
 if __name__ == "__main__":
