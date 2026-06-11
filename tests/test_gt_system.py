@@ -139,8 +139,22 @@ def test_med_gor(solved):
 def test_med_water_production_positive(solved):
     for b in solved.blocks:
         if isinstance(b, MED):
-            w = b.results["Water production"].value
+            w = b.results["Water production m3/day"].value
             assert w > 0
+
+
+def test_med_water_production_matches_v1(solved):
+    """Pin MED water production to the v1 trusted figure (~1165 m³/day at
+    default inputs). Earlier the MED block stored both m³/day and m³/h
+    under the same label; the m³/h row silently overwrote m³/day and the
+    UI reported a value 24× too low. ±2% tolerance per §8."""
+    v1_ref_m3pd = 1165.0
+    for b in solved.blocks:
+        if isinstance(b, MED):
+            w = b.results["Water production m3/day"].value
+            assert abs(w - v1_ref_m3pd) / v1_ref_m3pd < TOL, (
+                f"MED daily production = {w:.0f} m³/day, expected ~{v1_ref_m3pd:.0f} "
+                f"(±{TOL:.0%})")
 
 
 # ── §8.6  End-to-end ─────────────────────────────────────────────────────────

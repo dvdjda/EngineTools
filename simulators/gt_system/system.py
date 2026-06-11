@@ -125,5 +125,5 @@ def summary(solved: SolvedSystem) -> dict[str, float]:
     kpis["Steam generation t/h"]   = _get(HRSG, "Steam generation")            or 0.0
     kpis["LiBr cooling kW"]        = _get(LiBrChiller, "Cooling capacity kW")  or 0.0
     kpis["GPU IT load kW"]         = _get(GPUCassette, "IT power")             or 0.0
-    kpis["MED water m3day"]        = _get(MED, "Water production")             or 0.0
+    kpis["MED water m3day"]        = _get(MED, "Water production m3/day")      or 0.0
     return kpis

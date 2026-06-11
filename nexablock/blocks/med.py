@@ -112,8 +112,8 @@ class MED(Block):
 
         self._result("GOR",                gor,             "-",     "screening")
         self._result("MED thermal input",  q_med/1e3,       "kW",    "verified")
-        self._result("Water production",   m3pd,            "m³/day","verified")
-        self._result("Water production",   m3ph,            "m³/h",  "verified")
+        self._result("Water production m3/day", m3pd,        "m³/day","verified")
+        self._result("Water production m3/h",   m3ph,        "m³/h",  "verified")
         self._result("Seawater feed",      mdot_sw*3.6,     "m³/h",  "verified")
         self._result("Brine reject",       mdot_brine*3.6,  "m³/h",  "verified")
         self._result("MED electrical",     p_elec/1e3,      "kW",    "screening")
