@@ -6,8 +6,9 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .block  import Block
-    from .stream import Stream
+    from .block       import Block
+    from .stream      import Stream
+    from .convergence import ConvergenceStatus
 
 
 @dataclass
@@ -55,12 +56,18 @@ class System:
 
     # ── solving ───────────────────────────────────────────────────────────────
 
-    def solve(self) -> "SolvedSystem":
-        """Solve the system and return a SolvedSystem."""
+    def solve(self, tol: float = 1e-4, max_iter: int = 50) -> "SolvedSystem":
+        """Solve the system and return a SolvedSystem.
+
+        tol / max_iter forward to the Wegstein recycle solver. Acyclic
+        systems ignore them. On non-convergence the solver does NOT raise:
+        it returns a SolvedSystem whose convergence.converged is False,
+        and the renderers flag the KPIs as unreliable.
+        """
         from .solver import Solver
-        solver = Solver(self._blocks, self._connections)
+        solver = Solver(self._blocks, self._connections, tol=tol, max_iter=max_iter)
         solver.run()
-        return SolvedSystem(self, solver.convergence_info)
+        return SolvedSystem(self, solver.convergence)
 
     # ── internal helpers ──────────────────────────────────────────────────────
 
@@ -93,9 +100,9 @@ class System:
 
 @dataclass
 class SolvedSystem:
-    """Result of System.solve() — carries the wired system + convergence info."""
-    system:           System
-    convergence_info: dict = field(default_factory=dict)
+    """Result of System.solve() — carries the wired system + convergence status."""
+    system:      System
+    convergence: "ConvergenceStatus"
 
     @property
     def blocks(self):

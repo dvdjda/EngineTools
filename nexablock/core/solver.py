@@ -26,12 +26,20 @@ class Solver:
         self.connections = connections
         self.tol         = tol
         self.max_iter    = max_iter
-        self.convergence_info: dict = {}
+        # ConvergenceStatus, populated by run(). Acyclic systems get an empty loops list.
+        from .convergence import ConvergenceStatus
+        self.convergence: ConvergenceStatus = ConvergenceStatus(converged=True, loops=[])
 
     # ── public ────────────────────────────────────────────────────────────────
 
     def run(self) -> None:
-        """Solve. Raises on unconnected required inlets or non-convergence."""
+        """Solve.
+
+        Raises on unconnected required inlets, OR on compute() errors during
+        any forward pass. Does NOT raise on non-convergence — instead returns
+        with self.convergence.converged = False so the renderer can warn.
+        """
+        from .convergence import ConvergenceStatus
         # Propagate connections: outlet stream → inlet port
         self._wire_connections()
         # Check required inlets
@@ -43,7 +51,7 @@ class Solver:
         if not loops:
             order = self._topo_order(self.blocks, self.connections)
             self._forward_pass(order)
-            self.convergence_info = {"loops": 0, "acyclic": True}
+            self.convergence = ConvergenceStatus(converged=True, loops=[])
         else:
             self._solve_with_recycle(loops)
 
@@ -155,16 +163,25 @@ class Solver:
     # ── recycle solver ────────────────────────────────────────────────────────
 
     def _solve_with_recycle(self, loops: list) -> None:
-        """Wegstein iteration for recycle loops."""
-        # Choose tear: one connection per loop (the first intra-loop connection)
+        """Wegstein iteration for recycle loops.
+
+        Does NOT raise on max-iter exhaustion: marks the failing loops in
+        self.convergence and still runs a final forward pass so KPIs exist
+        (at the last-iteration tear values). The renderer surfaces the
+        warning and flags the KPIs as unreliable.
+        """
+        from .convergence import ConvergenceStatus, LoopStatus
+
+        # Choose tear: one connection per loop (the first intra-loop connection).
         tears = self._choose_tears(loops)
+        # Index tears by which SCC they belong to so per-loop residual tracking is clean.
+        tear_by_loop_idx = {i: tears[i] for i in range(len(loops))}
         log.info("Recycle loops detected. Tears: %s", tears)
 
         # Seed tears with initial guesses (zero/default stream)
         from .stream import Stream, StreamKind
         for tear_conn in tears:
             if tear_conn.dst_block.inlets[tear_conn.dst_port].stream is None:
-                # seed with a zero-ish copy of the source outlet if available
                 src_s = tear_conn.src_block.outlets[tear_conn.src_port].stream
                 guess = src_s.copy() if src_s is not None else \
                         Stream(kind=StreamKind.WATER_STEAM, mdot=1.0,
@@ -175,30 +192,30 @@ class Solver:
         non_tear_conns = [c for c in self.connections if c not in tears]
         order = self._topo_order(self.blocks, non_tear_conns)
 
-        # Wegstein state — keyed by id(conn) since Connection is not hashable
-        prev_x: dict = {}   # id(tear_conn) → previous assumed stream
-        prev_fx: dict = {}  # id(tear_conn) → previous computed stream
+        # Wegstein state, keyed by id(tear_conn)
+        prev_x: dict  = {}
+        prev_fx: dict = {}
 
-        loop_info = []
-        for iteration in range(self.max_iter):
+        # Per-loop residual history; the latest residual per loop drives status.
+        per_loop_res: dict = {i: float("inf") for i in tear_by_loop_idx}
+        iteration = 0
+        for iteration in range(1, self.max_iter + 1):
             # Forward pass with current tear guesses
             for block in order:
                 for c in self.connections:
                     if c.dst_block is block and c not in tears:
                         src_s = c.src_block.outlets[c.src_port].stream
                         block.inlets[c.dst_port].stream = src_s
-                block.results.clear()      # idempotent compute per iteration
+                block.results.clear()
                 block.compute()
 
-            # Check tear residuals; update using Wegstein
-            max_res = 0.0
-            for tc in tears:
+            # Per-tear residuals + Wegstein update
+            for i, tc in tear_by_loop_idx.items():
                 computed = tc.src_block.outlets[tc.src_port].stream
                 assumed  = tc.dst_block.inlets[tc.dst_port].stream
                 res = assumed.residual(computed) if assumed and computed else 1.0
-                max_res = max(max_res, res)
+                per_loop_res[i] = res
 
-                # Wegstein update for mdot, T, P
                 if assumed and computed:
                     new_stream = computed.copy()
                     k = id(tc)
@@ -209,23 +226,37 @@ class Solver:
                     prev_fx[k] = computed.copy()
                     tc.dst_block.inlets[tc.dst_port].stream = new_stream
 
-            loop_info.append(max_res)
-            log.debug("Recycle iter %d  max_res=%.4e", iteration + 1, max_res)
-            if max_res < self.tol:
+            log.debug("Recycle iter %d  per_loop=%s", iteration, per_loop_res)
+            if all(r < self.tol for r in per_loop_res.values()):
                 break
-        else:
-            raise RuntimeError(
-                f"Recycle did not converge after {self.max_iter} iterations. "
-                f"Final residual: {max_res:.4e}. History: {loop_info[-5:]}")
+        # NB: no `else: raise` — falling off the loop with res > tol is a
+        # convergence failure to be reported, not a crash.
 
-        # Final forward pass with converged tears
+        # Final forward pass with current (best-we-have) tear values.
         self._forward_pass(order)
-        self.convergence_info = {
-            "loops": len(loops),
-            "iterations": len(loop_info),
-            "final_residual": loop_info[-1],
-            "converged": loop_info[-1] < self.tol,
-        }
+
+        # Build per-loop status objects.
+        loop_statuses = []
+        for i, scc in enumerate(loops):
+            tear = tear_by_loop_idx[i]
+            res  = per_loop_res[i]
+            ok   = res < self.tol
+            loop_statuses.append(LoopStatus(
+                name="→".join(type(b).__name__ for b in scc),
+                blocks=[type(b).__name__ for b in scc],
+                tear=f"{type(tear.src_block).__name__}.{tear.src_port}"
+                     f" → {type(tear.dst_block).__name__}.{tear.dst_port}",
+                converged=ok,
+                iterations=iteration,
+                final_residual=res,
+                tolerance=self.tol,
+                reason=None if ok else "max iterations reached",
+            ))
+
+        self.convergence = ConvergenceStatus(
+            converged=all(L.converged for L in loop_statuses),
+            loops=loop_statuses,
+        )
 
     def _choose_tears(self, loops: list) -> list:
         """One tear connection per loop — pick the one with most downstream flow."""

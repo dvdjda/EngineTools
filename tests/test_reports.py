@@ -178,6 +178,77 @@ def test_excel_with_sweep_has_sheet_chart_and_table(engine, vals, solved,
     assert isinstance(first_kpi, (int, float)) and first_kpi is not None
 
 
+# ── Convergence-warning surfacing in reports ────────────────────────────────
+
+def _build_failing_engine():
+    """Tiny Engine that wraps the test_core recycle loop and forces non-
+    convergence via a tol below machine epsilon. Used to check the
+    convergence-warning path of build_excel end to end."""
+    from nexa_toolkit.framework.contract import Engine, InputSpec, OutputSpec
+    from nexablock.core.system   import System
+    from nexablock.core.stream   import Stream, StreamKind
+    from nexablock.core.recycle  import Recycle
+    from tests.test_core         import Heater, Cooler
+
+    class _FailEngine(Engine):
+        key = "_test_fail_engine"
+        name = "Failing recycle engine (test)"
+        status = "draft"
+        inputs = [InputSpec("dummy", "Dummy", "-", 0.0, -1, 1)]
+        def solve(self, v):
+            sys = System("forced-fail")
+            heater  = sys.add(Heater(Q_kW=200.0))   # imbalanced duties →
+            cooler  = sys.add(Cooler(Q_kW=50.0))    # no fixed point → diverges
+            recycle = sys.add(Recycle(StreamKind.WATER_STEAM, tol=1e-4))
+            seed = Stream.water_steam(mdot=2.0, T=300.0, P=2e5, h=1.2e5)
+            recycle.inlets["inlet"].stream = seed
+            sys.connect(heater.outlets["outlet"],  cooler.inlets["inlet"])
+            sys.connect(cooler.outlets["outlet"],  recycle.inlets["inlet"])
+            sys.connect(recycle.outlets["outlet"], heater.inlets["inlet"])
+            solved = sys.solve()                    # default tol/max_iter
+            return {"solved": solved, "kpis": {}}
+        def outputs(self, r):
+            return [OutputSpec("Dummy KPI", 1.0, "-", "verified", "{:.2f}")]
+
+    return _FailEngine()
+
+
+def test_xlsx_not_converged_shows_warning_cell(tmp_path):
+    """Build an Excel for a non-converged solve; assert the NOT CONVERGED
+    warning text and the convergence summary land as cell values, AND that
+    the (single) result row's Basis cell reads 'unverified' (KPI flagged)."""
+    from openpyxl import load_workbook
+    e = _build_failing_engine()
+    v = e.defaults()
+    r = e.solve(v)
+    p = tmp_path / "bad.xlsx"
+    build_excel(e, v, r, str(p))
+
+    ws = load_workbook(p).active
+    cells = []
+    for row in ws.iter_rows(values_only=True):
+        cells.extend(str(c) for c in row if c is not None)
+    joined = "\n".join(cells)
+    assert "NOT CONVERGED" in joined, "warning text missing from Excel"
+    assert "Convergence" in joined,    "Convergence band missing from Excel"
+    assert "unverified"  in joined,    "result row Basis should be 'unverified'"
+
+
+def test_xlsx_converged_no_warning(engine, vals, solved, tmp_path):
+    """Sanity counter-example: GT v2 acyclic solve produces a green convergence
+    summary, no warning text in the workbook."""
+    from openpyxl import load_workbook
+    p = tmp_path / "good.xlsx"
+    build_excel(engine, vals, solved, str(p))
+    ws = load_workbook(p).active
+    cells = []
+    for row in ws.iter_rows(values_only=True):
+        cells.extend(str(c) for c in row if c is not None)
+    joined = "\n".join(cells)
+    assert "no recycle loops" in joined
+    assert "NOT CONVERGED" not in joined
+
+
 def test_excel_with_scenarios_table_has_scenario_column(engine, vals, solved,
                                                         hooks, tmp_path):
     """ScenarioResult.as_dataframe is index=scenario name; we reset_index so

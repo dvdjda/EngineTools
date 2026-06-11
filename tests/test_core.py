@@ -141,29 +141,104 @@ def test_duplicate_result_label_raises():
 
 # ── 4. 2-block recycle loop ────────────────────────────────────────────────────
 
-def test_recycle_converges():
-    """
-    Heater → Cooler → Recycle → Heater (loop must converge).
-    Balanced duties (Heater == Cooler) guarantee a fixed point exists.
-    """
+def _build_recycle_loop(heater_kW: float = 100.0, cooler_kW: float = 100.0,
+                         tol: float = 1e-4):
+    """Heater → Cooler → Recycle → (back to Heater).
+    Balanced (default) → fixed point exists. Imbalanced → diverges,
+    used to force non-convergence in the failure-mode tests."""
     sys = System("recycle-test")
-    heater  = sys.add(Heater(Q_kW=100.0))
-    cooler  = sys.add(Cooler(Q_kW=100.0))   # balanced: fixed-point exists
-    recycle = sys.add(Recycle(StreamKind.WATER_STEAM, tol=1e-4))
-
+    heater  = sys.add(Heater(Q_kW=heater_kW))
+    cooler  = sys.add(Cooler(Q_kW=cooler_kW))
+    recycle = sys.add(Recycle(StreamKind.WATER_STEAM, tol=tol))
+    seed = Stream.water_steam(mdot=2.0, T=300.0, P=2e5, h=1.2e5)
+    recycle.inlets["inlet"].stream = seed                     # break the seed=src trick
     sys.connect(heater.outlets["outlet"],  cooler.inlets["inlet"])
     sys.connect(cooler.outlets["outlet"],  recycle.inlets["inlet"])
     sys.connect(recycle.outlets["outlet"], heater.inlets["inlet"])
+    return sys, recycle
 
+
+def test_recycle_converges():
+    """Balanced loop must converge and report per-loop status."""
+    sys, recycle = _build_recycle_loop(tol=1e-4)
     result = sys.solve()
-    ci = result.convergence_info
-    assert ci["converged"], f"Did not converge: {ci}"
-    assert ci["iterations"] < 50, f"Too many iterations: {ci['iterations']}"
-
+    conv = result.convergence
+    assert conv.converged
+    assert not conv.acyclic
+    assert len(conv.loops) == 1
+    L = conv.loops[0]
+    assert L.converged
+    assert L.iterations >= 1
+    assert L.iterations < 50
+    assert L.final_residual < L.tolerance
+    assert L.reason is None
+    assert "Heater" in L.name and "Cooler" in L.name and "Recycle" in L.name
     res = recycle.results.get("Recycle residual")
-    assert res is not None and res.value < 1e-4, f"Residual too large: {res}"
-    print(f"\nRecycle converged in {ci['iterations']} iterations, "
-          f"residual={ci['final_residual']:.2e}")
+    assert res is not None and res.value < 1e-4
+
+
+def test_acyclic_system_reports_converged_no_loops():
+    """No SCC → trivially converged, loops list empty."""
+    sys = System("acyclic")
+    heater = sys.add(Heater(Q_kW=100.0))
+    heater.inlets["inlet"].stream = Stream.water_steam(
+        mdot=2.0, T=300.0, P=2e5, h=1.2e5)
+    result = sys.solve()
+    conv = result.convergence
+    assert conv.converged
+    assert conv.acyclic
+    assert conv.loops == []
+
+
+def test_recycle_not_converged_imbalanced_loop_reports_failure():
+    """Imbalanced duties (Heater=200, Cooler=50) → no fixed point. Solver
+    must NOT raise; it returns with convergence.converged=False, reason
+    naming max-iter, and the final forward pass still populates block
+    results so the renderer can show them flagged-as-unreliable."""
+    sys, _ = _build_recycle_loop(heater_kW=200.0, cooler_kW=50.0)
+    result = sys.solve()                # default tol/max_iter
+    conv = result.convergence
+    assert not conv.converged
+    assert len(conv.loops) == 1
+    L = conv.loops[0]
+    assert not L.converged
+    assert L.iterations == 50            # hit max_iter
+    assert L.final_residual > L.tolerance
+    assert "max iter" in (L.reason or "").lower()
+    h = next(b for b in result.blocks if isinstance(b, Heater))
+    assert "Duty" in h.results           # final pass still ran
+
+
+def test_convergence_summary_lines():
+    """Pure unit tests of the helper that PDF/Excel/UI all consume."""
+    from nexablock.core.convergence import (
+        ConvergenceStatus, LoopStatus, convergence_summary)
+
+    # Acyclic
+    text, ok = convergence_summary(ConvergenceStatus(True, []))
+    assert ok and "no recycle loops" in text
+
+    # Converged with loop
+    L_ok = LoopStatus(name="A→B", blocks=["A", "B"], tear="B.x → A.y",
+                       converged=True, iterations=7,
+                       final_residual=4.2e-5, tolerance=1e-4)
+    text, ok = convergence_summary(ConvergenceStatus(True, [L_ok]))
+    assert ok
+    assert "converged in 7 iterations" in text
+    assert "4.20e-05" in text or "4.2e-05" in text
+    assert "1.0e-04" in text
+
+    # Not converged
+    L_bad = LoopStatus(name="X→Y", blocks=["X", "Y"], tear="Y.a → X.b",
+                       converged=False, iterations=50,
+                       final_residual=0.31, tolerance=1e-20,
+                       reason="max iterations reached")
+    text, ok = convergence_summary(ConvergenceStatus(False, [L_bad]))
+    assert not ok
+    assert "NOT CONVERGED" in text
+    assert "X→Y" in text
+    assert "after 50 iterations" in text
+    assert "max iterations reached" in text
 
 
 if __name__ == "__main__":

@@ -111,20 +111,49 @@ def highlight_cards(engine, r):
     return html.Div(cards, style={"display": "flex", "gap": "14px", "marginBottom": "16px"})
 
 
+def _convergence_status(r):
+    """Return SolvedSystem.convergence if r['solved'] has one, else None."""
+    solved = r.get("solved") if isinstance(r, dict) else None
+    return getattr(solved, "convergence", None) if solved is not None else None
+
+
+def convergence_banner(r):
+    """Convergence summary line for the banner area. Empty Div if no info."""
+    from nexablock.core.convergence import convergence_summary
+    conv = _convergence_status(r)
+    if conv is None:
+        return html.Div()
+    text, ok = convergence_summary(conv)
+    color = "#2E7D4E" if ok else RED
+    parts = [html.Div(f"Convergence: {text}",
+                      style={"fontSize": "12px", "fontWeight": "600",
+                             "color": color, "marginBottom": "6px"})]
+    if not ok:
+        parts.append(html.Div(
+            "⚠ NOT CONVERGED — KPIs below may be unreliable.",
+            style={"fontSize": "13px", "fontWeight": "700", "color": "white",
+                   "background": RED, "padding": "8px 12px",
+                   "borderRadius": "6px", "marginBottom": "8px"}))
+    return html.Div(parts)
+
+
 def results_table(engine, r):
     head = html.Tr([html.Th(h, style={"textAlign": "left" if h == "Quantity" else "center",
                                        "padding": "8px 10px", "color": NAVY, "fontSize": "13px",
                                        "borderBottom": f"2px solid {LIGHT}"})
                     for h in ("Quantity", "Value", "Unit", "Basis")])
     rows = [head]
+    conv = _convergence_status(r)
+    not_ok = conv is not None and not conv.converged
     for i, o in enumerate(engine.outputs(r)):
         bg = "white" if i % 2 == 0 else LIGHT
+        display_basis = "unverified" if not_ok else o.basis
         rows.append(html.Tr([
             html.Td(o.label, style={"padding": "7px 10px", "fontSize": "13px", "color": INK}),
             html.Td(o.text(), style={"padding": "7px 10px", "fontSize": "13px", "textAlign": "center"}),
             html.Td(o.unit, style={"padding": "7px 10px", "fontSize": "13px", "textAlign": "center", "color": GREY}),
-            html.Td(o.basis, style={"padding": "7px 10px", "fontSize": "12px", "textAlign": "center",
-                                    "color": BASIS.get(o.basis, GREY)}),
+            html.Td(display_basis, style={"padding": "7px 10px", "fontSize": "12px", "textAlign": "center",
+                                    "color": BASIS.get(display_basis, GREY)}),
         ], style={"background": bg}))
     return html.Table(rows, style={"width": "100%", "borderCollapse": "collapse"})
 
@@ -631,13 +660,16 @@ def _run(_n, key, values, ids):
     else:
         vals = engine.defaults()
     r = engine.solve(vals)
-    banner = None
+    # Banner can carry up to two stripes: draft notice (if any) + convergence status.
+    banner_parts = []
     if engine.status == "draft":
-        banner = html.Div(
+        banner_parts.append(html.Div(
             "Draft tool - generated skeleton, logic not filled, outputs unverified. "
             "Edit it through Request a tool, then verify and promote.",
             style={"background": "#FDEEEC", "border": f"1px solid {RED}", "color": RED,
-                   "padding": "10px 14px", "borderRadius": "8px", "marginBottom": "14px", "fontSize": "13px"})
+                   "padding": "10px 14px", "borderRadius": "8px", "marginBottom": "14px", "fontSize": "13px"}))
+    banner_parts.append(convergence_banner(r))
+    banner = html.Div(banner_parts) if banner_parts else None
     status_bar = html.Div([
         html.Span("\u2713  ", style={"fontWeight": "700"}),
         html.Span(f"Calculation complete \u2014 {engine.name}"),

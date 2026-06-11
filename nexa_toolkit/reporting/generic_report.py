@@ -21,8 +21,31 @@ def _design_rows(engine, values):
     return [(i.label, f"{values[i.key]:g}", i.unit) for i in engine.inputs]
 
 
+def _convergence_of(result):
+    """Return the SolvedSystem's ConvergenceStatus if result carries one, else None.
+    v1 engines (no 'solved' key) → None → existing report layout, unchanged."""
+    solved = result.get("solved") if isinstance(result, dict) else None
+    return getattr(solved, "convergence", None) if solved is not None else None
+
+
 def _result_rows(engine, result):
-    return [(o.label, o.text(), o.unit, o.basis) for o in engine.outputs(result)]
+    """Result rows. When the v2 solver flagged non-convergence, every basis is
+    forced to 'unverified' so the renderer paints the row red — two-layer
+    flagging together with the banner above the table."""
+    conv = _convergence_of(result)
+    not_ok = conv is not None and not conv.converged
+    return [(o.label, o.text(), o.unit,
+             "unverified" if not_ok else o.basis)
+            for o in engine.outputs(result)]
+
+
+def _convergence_text(result):
+    """One-line summary + ok-flag. (None, True) if the result has no convergence info."""
+    from nexablock.core.convergence import convergence_summary
+    conv = _convergence_of(result)
+    if conv is None:
+        return None, True
+    return convergence_summary(conv)
 
 
 # ---------- shared AI text parser ----------
@@ -198,6 +221,24 @@ def build_excel(engine, values, result, path, ai_text=None, study=None):
                 ws[f"{col}{row}"].alignment = Alignment(horizontal="center")
         row += 1
 
+    # Convergence status row(s) — only present when result carries a SolvedSystem.
+    conv_text, conv_ok = _convergence_text(result)
+    if conv_text is not None:
+        crow = row + 2
+        band(f"A{crow}", "Convergence", f"D{crow}")
+        ws.cell(crow + 1, 1, conv_text).font = Font(
+            name="Arial", bold=True, size=11,
+            color=("2E7D4E" if conv_ok else "C0392B"))
+        ws.merge_cells(f"A{crow + 1}:D{crow + 1}")
+        if not conv_ok:
+            ws.cell(crow + 2, 1,
+                    "⚠ NOT CONVERGED — KPIs below may be unreliable.").font = Font(
+                name="Arial", bold=True, size=10, color="C0392B")
+            ws.merge_cells(f"A{crow + 2}:D{crow + 2}")
+            row = crow + 3
+        else:
+            row = crow + 2
+
     start = row + 2
     band(f"A{start}", "Results", f"D{start}")
     header(start + 1, ("Quantity", "Value", "Unit", "Basis"))
@@ -307,6 +348,27 @@ def build_pdf(engine, values, result, path, chart_png, ai_text=None, study=None)
         ("TOPPADDING", (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
         ("LEFTPADDING", (0, 0), (0, -1), 8)]))
     story.append(d)
+
+    # Convergence status (only if the result carries a SolvedSystem).
+    conv_text, conv_ok = _convergence_text(result)
+    if conv_text is not None:
+        story.append(Spacer(1, 8))
+        story.append(Paragraph("Convergence", sec))
+        good_st = ParagraphStyle("conv_ok",  fontName="Helvetica-Bold", fontSize=9,
+                                  textColor=colors.HexColor("#2E7D4E"))
+        bad_st  = ParagraphStyle("conv_bad", fontName="Helvetica-Bold", fontSize=9.5,
+                                  textColor=colors.HexColor("#C0392B"))
+        story.append(Paragraph(conv_text, good_st if conv_ok else bad_st))
+        if not conv_ok:
+            warn_st = ParagraphStyle("conv_warn", fontName="Helvetica-Bold",
+                                      fontSize=10,
+                                      textColor=colors.HexColor("#C0392B"),
+                                      backColor=colors.HexColor("#FBE9E7"),
+                                      borderPadding=6, borderRadius=4,
+                                      spaceBefore=4, spaceAfter=4)
+            story.append(Paragraph(
+                "⚠ KPIs below may be unreliable — solve did not converge.",
+                warn_st))
 
     # results table with basis column
     story.append(Paragraph("Results", sec))
