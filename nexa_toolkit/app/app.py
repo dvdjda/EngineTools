@@ -7,7 +7,7 @@ conforming DRAFT that appears in the dropdown badged "draft" - the agent (Cody)
 fills its logic, sandboxed, and it stays draft until you promote it.
 
 Run:
-    pip install dash CoolProp scipy matplotlib reportlab openpyxl python-pptx
+    pip install dash CoolProp scipy matplotlib reportlab openpyxl python-pptx cairosvg
     python -m nexa_toolkit.app.app      # then open http://127.0.0.1:8050
 """
 import base64
@@ -485,12 +485,8 @@ app.layout = html.Div([
                                              style={"marginTop": "12px", "minHeight": "20px"})),
             ], style={**CARD, "marginBottom": "16px"}),
             html.Div([
-                _btn("Download PDF", "b-pdf"), _btn("Download Excel", "b-xlsx"), _btn("Download PPTX", "b-pptx"),
-                html.Button("🧪 Open in DWSIM", id="b-dwsim", n_clicks=0, style={
-                    "padding": "9px 16px", "borderRadius": "7px", "fontSize": "13px",
-                    "fontWeight": "600", "marginRight": "10px", "cursor": "pointer",
-                    "background": "#1A6B3C", "color": "white", "border": "1px solid #1A6B3C"}),
-                dcc.Download(id="d-pdf"), dcc.Download(id="d-xlsx"), dcc.Download(id="d-pptx"), dcc.Download(id="d-dwsim"),
+                _btn("Download PDF", "b-pdf"), _btn("Download Excel", "b-xlsx"),
+                dcc.Download(id="d-pdf"), dcc.Download(id="d-xlsx"),
             ]),
         ], style={"flex": "1"}),
     ], style={"display": "flex", "gap": "20px", "padding": "22px 28px", "maxWidth": "1200px", "margin": "0 auto"}),
@@ -658,37 +654,6 @@ def _dl_pdf(_n, data, ai_text):
               State("last", "data"), State("ai-text", "data"), prevent_initial_call=True)
 def _dl_xlsx(_n, data, ai_text):
     return _report(data, "xlsx", ai_text=ai_text)
-
-
-@app.callback(Output("d-pptx", "data"), Input("b-pptx", "n_clicks"),
-              State("last", "data"), State("ai-text", "data"), prevent_initial_call=True)
-def _dl_pptx(_n, data, ai_text):
-    return _report(data, "pptx", ai_text=ai_text)
-
-
-@app.callback(Output("d-dwsim", "data"), Input("b-dwsim", "n_clicks"),
-              State("last", "data"), prevent_initial_call=True)
-def _dl_dwsim(_n, data):
-    import traceback
-    try:
-        if not data:
-            print("[DWSIM] No simulation data — run first")
-            return no_update
-        if _dwsim_build_flowsheet is None:
-            print("[DWSIM] Export module not loaded")
-            return no_update
-        print(f"[DWSIM] Building flowsheet for {data['key']}")
-        engine = get(data["key"])
-        vals   = data["vals"]
-        r      = engine.solve(vals)
-        xml    = _dwsim_build_flowsheet(engine, vals, r)
-        slug   = engine.name.replace(" ", "_").replace("—", "-")[:50]
-        fname  = f"{slug}.dwxml"
-        print(f"[DWSIM] Generated {len(xml):,} chars → {fname}")
-        return dict(content=xml, filename=fname, type="application/xml", base64=False)
-    except Exception:
-        print("[DWSIM] ERROR:", traceback.format_exc())
-        return no_update
 
 
 if __name__ == "__main__":

@@ -48,6 +48,17 @@ def _parse_ai_sections(ai_text):
 
 # ---------- chart ----------
 def build_chart(engine, result, path):
+    # If the engine emits SVG but the caller wants a raster (PDF/PPTX),
+    # let the engine write SVG to a sibling file and rasterize via cairosvg.
+    fmt = getattr(engine, "chart_format", "png")
+    target_ext = os.path.splitext(path)[1].lower()
+    if fmt == "svg" and target_ext != ".svg":
+        import cairosvg
+        svg_path = path + ".tmp.svg"
+        engine.chart(result, svg_path)
+        cairosvg.svg2png(url=svg_path, write_to=path,
+                         output_width=1600, background_color="white")
+        return path
     sig = engine.chart(result, path)
     if sig:
         return sig

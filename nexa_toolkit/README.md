@@ -31,7 +31,7 @@ reporting, UI and MCP pick it up automatically.
 
 ## Run
 ```
-pip install CoolProp scipy matplotlib reportlab openpyxl python-pptx
+pip install CoolProp scipy matplotlib reportlab openpyxl python-pptx cairosvg
 python make_systems.py        # reports for every registered system -> ./systems
 ```
 
