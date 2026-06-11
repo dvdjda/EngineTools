@@ -1,5 +1,5 @@
 """
-Gas Turbine Simulator  —  GT + HRSG + LiBr + GPU + MED  —  TRUSTED, status="trusted".
+Gas Turbine Simulator  —  GT + HRSG + LiBr + GPU + MED  —  DEMOTED (superseded by gt_system_v2).
 
 Simple-cycle GT with full thermal integration — no steam turbine.
 
@@ -91,7 +91,7 @@ class Draft_gas_turbine_simulator_calculate_natural__1781147515(Engine):
     key    = "gas_turbine_simulator_calculate_natural__1781147515"
     name   = "GT System  \u2014  GT + HRSG + LiBr + GPU Cooling + MED"
     kind   = "simulator"
-    status = "trusted"
+    status = "draft"
     provenance = (
         "Gas Turbine Simulator\n"
         "Calculate Natural Gas consumption, total calorific energy output, required cooling "
@@ -102,6 +102,8 @@ class Draft_gas_turbine_simulator_calculate_natural__1781147515(Engine):
         "Steam turbine removed 2026-06-11 per David's instruction.]"
     )
     notes = (
+        "Superseded by gt_system_v2 (trusted, validated \u00b12% vs this v1 reference, "
+        "14/14 checks; tests/test_gt_system.py). Retained for back-comparison only. "
         "Simple-cycle GT with thermal integration: GT exhaust \u2192 HRSG \u2192 steam split to "
         "(a) LiBr absorption chiller \u2192 GPU/TPU immersion cooling and "
         "(b) MED thermal desalination \u2192 fresh water. No steam turbine. "
