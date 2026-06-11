@@ -123,7 +123,7 @@ def summary(solved: SolvedSystem) -> dict[str, float]:
     kpis["GT actual power kW"]     = _get(GasTurbine, "GT actual power")       or 0.0
     kpis["NG consumption Nm3h"]    = _get(GasTurbine, "NG consumption")        or 0.0
     kpis["Steam generation t/h"]   = _get(HRSG, "Steam generation")            or 0.0
-    kpis["LiBr cooling kW"]        = _get(LiBrChiller, "Cooling capacity")     or 0.0
+    kpis["LiBr cooling kW"]        = _get(LiBrChiller, "Cooling capacity kW")  or 0.0
     kpis["GPU IT load kW"]         = _get(GPUCassette, "IT power")             or 0.0
     kpis["MED water m3day"]        = _get(MED, "Water production")             or 0.0
     return kpis

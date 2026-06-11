@@ -77,7 +77,7 @@ class LiBrChiller(Block):
             self._out_set("ct_water_out", Stream.energy(0.0))
             return
 
-        h_cond_100 = _props.h_water(_P_ATM, 373.15)        # J/kg  condensate at 100°C
+        h_cond_100 = _props.h_sat_liq(_P_ATM)              # J/kg  condensate at 100°C (saturated liquid; h_water at T_sat picks vapour)
         q_gen      = s.mdot * (s.h - h_cond_100)           # W
         q_cool     = q_gen * cop                            # W
         q_cond_ct  = q_gen + q_cool                        # W
