@@ -28,12 +28,25 @@ def _convergence_of(result):
     return getattr(solved, "convergence", None) if solved is not None else None
 
 
-def _result_rows(engine, result):
-    """Result rows. When the v2 solver flagged non-convergence, every basis is
-    forced to 'unverified' so the renderer paints the row red — two-layer
-    flagging together with the banner above the table."""
+def _feasibility_of(result):
+    """Return result['feasibility'] (FeasibilityStatus) if the engine surfaces it.
+    Strictly independent of convergence — different failure mode."""
+    return result.get("feasibility") if isinstance(result, dict) else None
+
+
+def _any_failed(result) -> bool:
+    """Either solver or feasibility check failed → KPIs untrustworthy."""
     conv = _convergence_of(result)
-    not_ok = conv is not None and not conv.converged
+    feas = _feasibility_of(result)
+    return ((conv is not None and not conv.converged) or
+            (feas is not None and not feas.feasible))
+
+
+def _result_rows(engine, result):
+    """Result rows. Override basis to 'unverified' (red) when either the
+    solver loops failed OR the power balance is infeasible — both are
+    independent reasons to distrust the KPIs."""
+    not_ok = _any_failed(result)
     return [(o.label, o.text(), o.unit,
              "unverified" if not_ok else o.basis)
             for o in engine.outputs(result)]
@@ -239,6 +252,49 @@ def build_excel(engine, values, result, path, ai_text=None, study=None):
         else:
             row = crow + 2
 
+    # Power balance section — strictly independent of convergence.
+    feas = _feasibility_of(result)
+    if feas is not None:
+        frow = row + 2
+        band(f"A{frow}", "Power balance", f"D{frow}")
+        ws.cell(frow + 1, 1, f"Assumption: {feas.assumption}").font = Font(
+            name="Arial", italic=True, size=10, color=HEX_GREY)
+        ws.merge_cells(f"A{frow + 1}:D{frow + 1}")
+        # Summary triplet
+        for i, (lab, val) in enumerate([
+            ("Generation",  feas.generation_kW),
+            ("Demand",      feas.demand_kW),
+            ("Balance",     feas.balance_kW),
+            ("Shortfall",   feas.shortfall_kW),
+        ], start=frow + 2):
+            ws.cell(i, 1, lab).font = Font(name="Arial", bold=True)
+            ws.cell(i, 2, round(val, 1))
+            ws.cell(i, 3, "kW")
+            if lab == "Balance":
+                ws.cell(i, 2).font = Font(
+                    name="Arial", bold=True,
+                    color=("2E7D4E" if feas.feasible else "C0392B"))
+        # Breakdown
+        bdrow = frow + 6
+        ws.cell(bdrow, 1, "Breakdown").font = Font(name="Arial", bold=True,
+                                                    color=HEX_GREY)
+        for i, (k, v) in enumerate(feas.breakdown.items(), start=bdrow + 1):
+            ws.cell(i, 1, k)
+            ws.cell(i, 2, "not modelled" if v is None else round(v, 1))
+            ws.cell(i, 3, "" if v is None else "kW")
+        next_row = bdrow + 1 + len(feas.breakdown)
+        if not feas.feasible:
+            ws.cell(next_row + 1, 1,
+                    f"⚠ POWER DEFICIT — demand {feas.demand_kW:,.0f} kW > "
+                    f"generation {feas.generation_kW:,.0f} kW, shortfall "
+                    f"{feas.shortfall_kW:,.0f} kW. "
+                    f"System cannot supply its own load.").font = Font(
+                name="Arial", bold=True, size=11, color="C0392B")
+            ws.merge_cells(f"A{next_row + 1}:D{next_row + 1}")
+            row = next_row + 2
+        else:
+            row = next_row
+
     start = row + 2
     band(f"A{start}", "Results", f"D{start}")
     header(start + 1, ("Quantity", "Value", "Unit", "Basis"))
@@ -369,6 +425,49 @@ def build_pdf(engine, values, result, path, chart_png, ai_text=None, study=None)
             story.append(Paragraph(
                 "⚠ KPIs below may be unreliable — solve did not converge.",
                 warn_st))
+
+    # Power balance section (strictly separate from convergence).
+    feas = _feasibility_of(result)
+    if feas is not None:
+        green = colors.HexColor("#2E7D4E"); red = colors.HexColor("#C0392B")
+        story.append(Spacer(1, 8))
+        story.append(Paragraph("Power balance", sec))
+        assum_st = ParagraphStyle("feas_assum", fontName="Helvetica-Oblique",
+                                   fontSize=8.5, textColor=grey, spaceAfter=4)
+        story.append(Paragraph(f"Assumption: {feas.assumption}", assum_st))
+        bal_color = green if feas.feasible else red
+        bal_st = ParagraphStyle("feas_bal", fontName="Helvetica-Bold", fontSize=10,
+                                 textColor=bal_color)
+        story.append(Paragraph(
+            f"Generation {feas.generation_kW:,.0f} kW · "
+            f"Demand {feas.demand_kW:,.0f} kW · "
+            f"Balance {feas.balance_kW:+,.0f} kW", bal_st))
+        bd_rows = []
+        for k, v in feas.breakdown.items():
+            bd_rows.append([k, "not modelled" if v is None else f"{v:+,.1f} kW"])
+        if bd_rows:
+            bd = Table(bd_rows, colWidths=[W * 0.55, W * 0.35])
+            bd.setStyle(TableStyle([
+                ("FONT", (0, 0), (-1, -1), "Helvetica", 8.5),
+                ("TEXTCOLOR", (0, 0), (-1, -1), ink),
+                ("ROWBACKGROUNDS", (0, 0), (-1, -1), [colors.white, light]),
+                ("ALIGN", (1, 0), (-1, -1), "RIGHT"),
+                ("LEFTPADDING", (0, 0), (0, -1), 8),
+                ("TOPPADDING", (0, 0), (-1, -1), 2),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 2)]))
+            story.append(bd)
+        if not feas.feasible:
+            warn_st = ParagraphStyle("feas_warn", fontName="Helvetica-Bold",
+                                      fontSize=10.5,
+                                      textColor=colors.HexColor("#C0392B"),
+                                      backColor=colors.HexColor("#FBE9E7"),
+                                      borderPadding=6, borderRadius=4,
+                                      spaceBefore=6, spaceAfter=6)
+            story.append(Paragraph(
+                f"⚠ POWER DEFICIT — demand {feas.demand_kW:,.0f} kW &gt; "
+                f"generation {feas.generation_kW:,.0f} kW, "
+                f"shortfall {feas.shortfall_kW:,.0f} kW. "
+                f"System cannot supply its own load.", warn_st))
 
     # results table with basis column
     story.append(Paragraph("Results", sec))

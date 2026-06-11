@@ -234,6 +234,54 @@ def test_xlsx_not_converged_shows_warning_cell(tmp_path):
     assert "unverified"  in joined,    "result row Basis should be 'unverified'"
 
 
+def test_xlsx_deficit_shows_warning_and_flags_kpis(engine, hooks, tmp_path):
+    """gpu_it_kW=10000 forces a ~2600 kW deficit. Excel must carry the
+    POWER DEFICIT warning, the Power balance band, the assumption line,
+    and every Basis cell flipped to 'unverified' — even though the solve
+    converges (feasibility independently flags KPIs)."""
+    from openpyxl import load_workbook
+    v = engine.defaults(); v["gpu_it_kW"] = 10000.0
+    r = engine.solve(v)
+    assert r["solved"].convergence.converged       # convergence still OK
+    assert not r["feasibility"].feasible           # feasibility flips
+
+    p = tmp_path / "deficit.xlsx"
+    build_excel(engine, v, r, str(p))
+    ws = load_workbook(p).active
+    cells = []
+    for row in ws.iter_rows(values_only=True):
+        cells.extend(str(c) for c in row if c is not None)
+    joined = "\n".join(cells)
+    assert "POWER DEFICIT"   in joined, "deficit warning missing from Excel"
+    assert "Power balance"   in joined, "Power balance band missing"
+    assert "Assumption"      in joined, "assumption line missing"
+    assert "GT-powered"      in joined, "assumption text missing"
+    assert "unverified"      in joined, "KPI Basis cells should be flagged"
+    # Every itemised aux line must appear in the breakdown.
+    for line in ("LiBr pump electrical",
+                 "Cooling tower fan electrical",
+                 "GT auxiliaries",
+                 "Plant BoP"):
+        assert line in joined, f"breakdown line {line!r} missing from Excel"
+    # Convergence still reads green — two separate truths.
+    assert "no recycle loops" in joined
+
+
+def test_xlsx_feasible_default_no_deficit_warning(engine, vals, solved, tmp_path):
+    """Defaults are feasible; the Power balance band exists but no
+    POWER DEFICIT warning."""
+    from openpyxl import load_workbook
+    p = tmp_path / "feasible.xlsx"
+    build_excel(engine, vals, solved, str(p))
+    ws = load_workbook(p).active
+    cells = []
+    for row in ws.iter_rows(values_only=True):
+        cells.extend(str(c) for c in row if c is not None)
+    joined = "\n".join(cells)
+    assert "Power balance" in joined
+    assert "POWER DEFICIT" not in joined
+
+
 def test_xlsx_converged_no_warning(engine, vals, solved, tmp_path):
     """Sanity counter-example: GT v2 acyclic solve produces a green convergence
     summary, no warning text in the workbook."""

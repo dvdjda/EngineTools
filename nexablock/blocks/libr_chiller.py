@@ -35,22 +35,26 @@ class LiBrChiller(Block):
     label    = "LiBr Chiller"
 
     def __init__(self,
-                 cop:       float = 0.70,
-                 chw_sup_C: float = 7.0,
-                 chw_dt_K:  float = 6.0,
-                 chw_cp:    float = 4187.0) -> None:
+                 cop:        float = 0.70,
+                 chw_sup_C:  float = 7.0,
+                 chw_dt_K:   float = 6.0,
+                 chw_cp:     float = 4187.0,
+                 pump_frac:  float = 0.015) -> None:    # 1.5% of cooling (screening)
         super().__init__()
-        self._cop     = cop
-        self._chw_sup = chw_sup_C + 273.15
-        self._chw_dt  = chw_dt_K
-        self._chw_cp  = chw_cp
+        self._cop       = cop
+        self._chw_sup   = chw_sup_C + 273.15
+        self._chw_dt    = chw_dt_K
+        self._chw_cp    = chw_cp
+        self._pump_frac = pump_frac
 
     def _build_params(self) -> dict[str, Param]:
         return {
-            "cop":      Param(self._cop,    "-",   min=0.5, max=1.3),
-            "chw_sup":  Param(self._chw_sup,"K",   desc="CHW supply temperature"),
-            "chw_dt":   Param(self._chw_dt, "K",   min=3, max=15),
-            "chw_cp":   Param(self._chw_cp, "J/(kg·K)"),
+            "cop":       Param(self._cop,    "-",   min=0.5, max=1.3),
+            "chw_sup":   Param(self._chw_sup,"K",   desc="CHW supply temperature"),
+            "chw_dt":    Param(self._chw_dt, "K",   min=3, max=15),
+            "chw_cp":    Param(self._chw_cp, "J/(kg·K)"),
+            "pump_frac": Param(self._pump_frac, "-", min=0.0, max=0.05,
+                                desc="Solution + refrigerant pump electrical as fraction of cooling"),
         }
 
     def _build_inlets(self) -> dict[str, Port]:
@@ -95,14 +99,18 @@ class LiBrChiller(Block):
             label="CHW supply"))
         self._out_set("ct_water_out", Stream.energy(power=q_cond_ct, label="LiBr condenser→CT"))
 
-        self._result("Generator duty",    q_gen/1e3,   "kW",  "verified")
-        self._result("Cooling capacity kW", q_cool/1e3,  "kW",  "verified", "COP×Q_gen")
-        self._result("Cooling capacity TR", q_cool/3517, "TR",  "verified")
-        self._result("Condenser duty",    q_cond_ct/1e3,"kW", "verified")
-        self._result("CHW flow",          mdot_chw*3.6,"m³/h","verified")
-        self._result("CHW supply temp",   chw_sup-273.15,"°C","input")
-        self._result("CHW return temp",   chw_ret_t-273.15,"°C","verified")
-        self._result("COP achieved",      cop,         "-",   "input")
+        pump_kW = self._p("pump_frac") * q_cool / 1e3      # solution + refrigerant pumps
+
+        self._result("Generator duty",       q_gen/1e3,     "kW",  "verified")
+        self._result("Cooling capacity kW",  q_cool/1e3,    "kW",  "verified", "COP×Q_gen")
+        self._result("Cooling capacity TR",  q_cool/3517,   "TR",  "verified")
+        self._result("Condenser duty",       q_cond_ct/1e3, "kW",  "verified")
+        self._result("CHW flow",             mdot_chw*3.6,  "m³/h","verified")
+        self._result("CHW supply temp",      chw_sup-273.15,"°C",  "input")
+        self._result("CHW return temp",      chw_ret_t-273.15,"°C","verified")
+        self._result("COP achieved",         cop,           "-",   "input")
+        self._result("LiBr pump electrical", pump_kW,       "kW",  "screening",
+                     "pump_frac × Q_cool (screening)")
 
     def references(self):
         return [Reference(

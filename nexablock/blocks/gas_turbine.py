@@ -36,21 +36,25 @@ class GasTurbine(Block):
                  load_pct:     float = 85.0,
                  gt_eff:       float = 0.35,
                  t_ambient_C:  float = 25.0,
-                 t_exhaust_C:  float = 530.0) -> None:
+                 t_exhaust_C:  float = 530.0,
+                 aux_frac:     float = 0.010) -> None:    # 1.0% of derated capacity
         super().__init__()
         self._p_rated  = p_rated_kW * 1e3
         self._load_pct = load_pct
         self._gt_eff   = gt_eff
         self._t_amb    = t_ambient_C + 273.15
         self._t_exh    = t_exhaust_C + 273.15
+        self._aux_frac = aux_frac
 
     def _build_params(self) -> dict[str, Param]:
         return {
-            "p_rated_W":  Param(self._p_rated,  "W",   desc="GT ISO rated power"),
-            "load_pct":   Param(self._load_pct, "%",   min=10, max=100),
-            "gt_eff":     Param(self._gt_eff,   "-",   min=0.15, max=0.45),
-            "t_amb_K":    Param(self._t_amb,    "K",   desc="Ambient temperature"),
-            "t_exh_K":    Param(self._t_exh,    "K",   desc="Exhaust gas temperature"),
+            "p_rated_W": Param(self._p_rated,  "W",   desc="GT ISO rated power"),
+            "load_pct":  Param(self._load_pct, "%",   min=10, max=100),
+            "gt_eff":    Param(self._gt_eff,   "-",   min=0.15, max=0.45),
+            "t_amb_K":   Param(self._t_amb,    "K",   desc="Ambient temperature"),
+            "t_exh_K":   Param(self._t_exh,    "K",   desc="Exhaust gas temperature"),
+            "aux_frac":  Param(self._aux_frac, "-",   min=0.0, max=0.05,
+                                desc="GT auxiliary electrical as fraction of derated capacity"),
         }
 
     def _build_inlets(self) -> dict[str, Port]:
@@ -88,9 +92,13 @@ class GasTurbine(Block):
         self._out_set("power", Stream.electrical(power=p_gt, label="GT electrical"))
         self._out_set("gt_cw", Stream.energy(power=gt_cw_W, label="GT CW duty"))
 
+        gt_aux_kW = self._p("aux_frac") * p_derate / 1e3       # GT auxiliaries (lube oil, fuel skid, controls)
+
         # Results
         self._result("GT derated capacity", p_derate/1e3,    "kW", "verified")
         self._result("GT actual power",     p_gt/1e3,        "kW", "verified")
+        self._result("GT aux electrical",   gt_aux_kW,       "kW", "screening",
+                     "aux_frac × derated capacity (screening)")
         self._result("Fuel energy input",   fuel_W/1e3,      "kW", "verified")
         self._result("NG consumption kg/h",  ng_kgps*3600,         "kg/h",  "verified")
         self._result("NG consumption Nm3/h", ng_kgps*3600/_NG_RHO, "Nm³/h", "verified")

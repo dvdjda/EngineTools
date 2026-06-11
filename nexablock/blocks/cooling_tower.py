@@ -29,11 +29,13 @@ class CoolingTower(Block):
     def __init__(self,
                  t_wb_C:     float = 25.0,
                  approach_K: float = 5.0,
-                 dt_ct_K:    float = 7.0) -> None:
+                 dt_ct_K:    float = 7.0,
+                 fan_frac:   float = 0.015) -> None:    # 1.5% of rejected heat (screening)
         super().__init__()
         self._t_wb      = t_wb_C + 273.15
         self._approach  = approach_K
         self._dt_ct     = dt_ct_K
+        self._fan_frac  = fan_frac
 
     def _build_params(self) -> dict[str, Param]:
         return {
@@ -42,6 +44,8 @@ class CoolingTower(Block):
                               desc="CT approach (T_supply − T_wb)"),
             "dt_ct":    Param(self._dt_ct,    "K",  min=3, max=15,
                               desc="CT water temperature rise"),
+            "fan_frac": Param(self._fan_frac, "-",  min=0.0, max=0.10,
+                              desc="Fan electrical as fraction of rejected heat"),
         }
 
     def _build_inlets(self) -> dict[str, Port]:
@@ -68,9 +72,13 @@ class CoolingTower(Block):
             mdot=mdot, T=t_sup, P=3e5, cp=_CP_W, rho=998.0,
             label="CT supply water"))
 
-        self._result("CT heat duty",   q_W/1e3,     "kW",  "verified")
-        self._result("CT water flow",  mdot*3.6,    "m³/h","verified")
-        self._result("CT supply temp", t_sup-273.15,"°C",  "verified")
-        self._result("CT return temp", t_ret-273.15,"°C",  "verified")
-        self._result("CT ΔT",          dt,          "K",   "input")
-        self._result("Wet-bulb temp",  t_wb-273.15, "°C",  "input")
+        fan_kW = self._p("fan_frac") * q_W / 1e3      # electrical aux
+
+        self._result("CT heat duty",       q_W/1e3,     "kW",  "verified")
+        self._result("CT water flow",      mdot*3.6,    "m³/h","verified")
+        self._result("CT supply temp",     t_sup-273.15,"°C",  "verified")
+        self._result("CT return temp",     t_ret-273.15,"°C",  "verified")
+        self._result("CT ΔT",              dt,          "K",   "input")
+        self._result("Wet-bulb temp",      t_wb-273.15, "°C",  "input")
+        self._result("CT fan electrical",  fan_kW,      "kW",  "screening",
+                     "fan_frac × rejected heat (screening)")

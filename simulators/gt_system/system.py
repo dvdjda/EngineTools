@@ -49,6 +49,11 @@ class GTSystemParams:
     sw_t_C:       float = 28.0
     # Cooling tower
     t_wb_C:       float = 25.0
+    # Plant aux loads (electrical, kW = fraction × base)
+    gt_aux_frac:    float = 0.010    # GT aux as fraction of derated GT capacity
+    libr_pump_frac: float = 0.015    # LiBr solution+refrigerant pumps as fraction of cooling
+    ct_fan_frac:    float = 0.015    # CT fans as fraction of rejected heat
+    bop_frac:       float = 0.010    # Plant balance-of-plant (lights/HVAC/etc) as fraction of GT power
 
 
 def build_gt_system(p: GTSystemParams) -> SolvedSystem:
@@ -63,7 +68,7 @@ def build_gt_system(p: GTSystemParams) -> SolvedSystem:
     gt      = sys.add(GasTurbine(
                 p_rated_kW=p.p_rated_kW, load_pct=p.load_pct,
                 gt_eff=p.gt_eff, t_ambient_C=p.t_ambient_C,
-                t_exhaust_C=p.t_exhaust_C))
+                t_exhaust_C=p.t_exhaust_C, aux_frac=p.gt_aux_frac))
 
     hrsg    = sys.add(HRSG(
                 hrsg_eff_pct=p.hrsg_eff_pct,
@@ -73,7 +78,8 @@ def build_gt_system(p: GTSystemParams) -> SolvedSystem:
     splitter= sys.add(SteamSplitter(libr_frac=p.libr_frac))
 
     chiller = sys.add(LiBrChiller(
-                cop=p.libr_cop, chw_sup_C=p.chw_sup_C, chw_dt_K=p.chw_dt_K))
+                cop=p.libr_cop, chw_sup_C=p.chw_sup_C, chw_dt_K=p.chw_dt_K,
+                pump_frac=p.libr_pump_frac))
 
     gpu     = sys.add(GPUCassette(
                 n_gpu=1, p_gpu_kW=p.gpu_it_kW,   # 1 virtual cassette = whole DC
@@ -83,7 +89,7 @@ def build_gt_system(p: GTSystemParams) -> SolvedSystem:
     med     = sys.add(MED(
                 n_effects=p.med_effects, sw_t_C=p.sw_t_C))
 
-    ct      = sys.add(CoolingTower(t_wb_C=p.t_wb_C))
+    ct      = sys.add(CoolingTower(t_wb_C=p.t_wb_C, fan_frac=p.ct_fan_frac))
 
     # ── Feedwater seed stream (no upstream block — source) ────────────────────
     fw_seed = Stream.water_steam(

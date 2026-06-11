@@ -117,6 +117,64 @@ def _convergence_status(r):
     return getattr(solved, "convergence", None) if solved is not None else None
 
 
+def _feasibility_status(r):
+    """Return r['feasibility'] (FeasibilityStatus) if engine surfaces it."""
+    return r.get("feasibility") if isinstance(r, dict) else None
+
+
+def feasibility_card(r):
+    """Power-balance card. Green when feasible, red+loud when not."""
+    feas = _feasibility_status(r)
+    if feas is None:
+        return html.Div()
+    GREEN = "#2E7D4E"
+
+    summary = (f"Generation {feas.generation_kW:,.0f} kW · "
+               f"Demand {feas.demand_kW:,.0f} kW · "
+               f"Balance {feas.balance_kW:+,.0f} kW")
+
+    if feas.feasible:
+        return html.Div([
+            html.Div([
+                html.Span("✓ ", style={"fontWeight": "800", "fontSize": "16px",
+                                        "color": GREEN}),
+                html.Span("Power balance",
+                          style={"fontWeight": "700", "fontSize": "14px",
+                                 "color": GREEN, "marginRight": "10px"}),
+                html.Span(summary, style={"fontSize": "13px", "color": INK}),
+            ]),
+            html.Div(f"Assumption: {feas.assumption}",
+                     style={"fontSize": "11px", "color": GREY,
+                            "marginTop": "4px", "fontStyle": "italic"}),
+        ], style={
+            "background": "#EAF7EE", "border": f"1px solid {GREEN}",
+            "borderRadius": "8px", "padding": "10px 14px",
+            "marginBottom": "14px",
+        })
+
+    return html.Div([
+        html.Div([
+            html.Span("⚠ ", style={"fontWeight": "800", "fontSize": "18px"}),
+            html.Span("POWER DEFICIT",
+                      style={"fontWeight": "800", "fontSize": "15px",
+                             "letterSpacing": "0.5px"}),
+        ], style={"marginBottom": "6px"}),
+        html.Div(
+            f"demand {feas.demand_kW:,.0f} kW > generation "
+            f"{feas.generation_kW:,.0f} kW, shortfall "
+            f"{feas.shortfall_kW:,.0f} kW",
+            style={"fontSize": "13px", "fontWeight": "700", "marginBottom": "4px"}),
+        html.Div("System cannot supply its own load. KPIs below are not self-consistent.",
+                 style={"fontSize": "12px", "fontStyle": "italic", "marginBottom": "6px"}),
+        html.Div(f"Assumption: {feas.assumption}",
+                 style={"fontSize": "11px", "opacity": "0.85"}),
+    ], style={
+        "background": RED, "color": "white",
+        "borderRadius": "8px", "padding": "12px 16px",
+        "marginBottom": "14px",
+    })
+
+
 def convergence_card(r):
     """Dedicated convergence-status card shown after every Run. Renders nothing
     for engines that don't return a SolvedSystem (v1 path) so layout is stable."""
@@ -169,7 +227,9 @@ def results_table(engine, r):
                     for h in ("Quantity", "Value", "Unit", "Basis")])
     rows = [head]
     conv = _convergence_status(r)
-    not_ok = conv is not None and not conv.converged
+    feas = _feasibility_status(r)
+    not_ok = ((conv is not None and not conv.converged) or
+              (feas is not None and not feas.feasible))
     for i, o in enumerate(engine.outputs(r)):
         bg = "white" if i % 2 == 0 else LIGHT
         display_basis = "unverified" if not_ok else o.basis
@@ -525,6 +585,7 @@ app.layout = html.Div([
             html.Div(id="status-bar"),
             html.Div(id="banner"),
             html.Div(id="conv-status"),       # convergence card (per-Run, persistent across study clicks)
+            html.Div(id="feas-status"),       # power-balance feasibility card (separate from convergence)
             html.Div(id="highlights"),
             html.Div([
                 dcc.Loading(type="circle", color=TEAL,
@@ -677,7 +738,7 @@ def _material_select(mat_val):
     Output("highlights", "children"), Output("results", "children"),
     Output("chart", "src"), Output("last", "data"), Output("banner", "children"),
     Output("status-bar", "children"), Output("smart-section", "children"),
-    Output("conv-status", "children"),
+    Output("conv-status", "children"), Output("feas-status", "children"),
     Input("run", "n_clicks"), Input("system", "value"),
     State({"type": "sysin", "key": ALL}, "value"), State({"type": "sysin", "key": ALL}, "id"))
 def _run(_n, key, values, ids):
@@ -698,6 +759,7 @@ def _run(_n, key, values, ids):
             style={"background": "#FDEEEC", "border": f"1px solid {RED}", "color": RED,
                    "padding": "10px 14px", "borderRadius": "8px", "marginBottom": "14px", "fontSize": "13px"})
     conv_status = convergence_card(r)
+    feas_status = feasibility_card(r)
     status_bar = html.Div([
         html.Span("\u2713  ", style={"fontWeight": "700"}),
         html.Span(f"Calculation complete \u2014 {engine.name}"),
@@ -706,7 +768,7 @@ def _run(_n, key, values, ids):
               "color": TEAL, "fontWeight": "600"})
     return (highlight_cards(engine, r), results_table(engine, r), chart_src(engine, r),
             {"key": key, "vals": vals}, banner, status_bar,
-            build_smart_section(engine, vals, r), conv_status)
+            build_smart_section(engine, vals, r), conv_status, feas_status)
 
 
 @app.callback(Output("modal", "style"),

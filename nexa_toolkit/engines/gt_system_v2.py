@@ -19,8 +19,9 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 from nexa_toolkit.framework.contract import Engine, InputSpec, OutputSpec, register
-from simulators.gt_system.system  import GTSystemParams, build_gt_system, summary
-from nexablock.viz.svg            import render as render_svg
+from simulators.gt_system.system       import GTSystemParams, build_gt_system, summary
+from simulators.gt_system.feasibility  import power_balance
+from nexablock.viz.svg                 import render as render_svg
 
 
 def _params_from(v: dict) -> GTSystemParams:
@@ -43,6 +44,10 @@ def _params_from(v: dict) -> GTSystemParams:
         med_effects  = int(v["med_effects"]),
         sw_t_C       = float(v["sw_t_C"]),
         t_wb_C       = float(v["t_wb_C"]),
+        gt_aux_frac    = float(v.get("gt_aux_frac",    0.010)),
+        libr_pump_frac = float(v.get("libr_pump_frac", 0.015)),
+        ct_fan_frac    = float(v.get("ct_fan_frac",    0.015)),
+        bop_frac       = float(v.get("bop_frac",       0.010)),
     )
 
 
@@ -79,11 +84,21 @@ class GTSystemV2(Engine):
         InputSpec("med_effects",  "MED effects",            "-",   8.0,       1,      16),
         InputSpec("sw_t_C",       "Seawater temp",          "°C",  28.0,      0,      45),
         InputSpec("t_wb_C",       "Cooling tower wet-bulb", "°C",  25.0,     -5,      38),
+        # Plant aux electrical load fractions (screening defaults; tune for site)
+        InputSpec("gt_aux_frac",    "GT aux fraction (of derated cap)",      "-", 0.010, 0.0, 0.05),
+        InputSpec("libr_pump_frac", "LiBr pump fraction (of cooling)",       "-", 0.015, 0.0, 0.05),
+        InputSpec("ct_fan_frac",    "CT fan fraction (of rejected heat)",    "-", 0.015, 0.0, 0.10),
+        InputSpec("bop_frac",       "Plant BoP fraction (lights/HVAC, of GT)","-", 0.010, 0.0, 0.05),
     ]
 
     def solve(self, v: dict) -> dict:
-        solved = build_gt_system(_params_from(v))
-        return {"solved": solved, "kpis": summary(solved)}
+        params = _params_from(v)
+        solved = build_gt_system(params)
+        return {
+            "solved":      solved,
+            "kpis":        summary(solved),
+            "feasibility": power_balance(solved, bop_frac=params.bop_frac),
+        }
 
     def outputs(self, r: dict) -> list:
         k = r["kpis"]
