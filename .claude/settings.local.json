@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git -C /Users/dvdj/EngineTools add .gitignore)",
+      "Bash(git -C /Users/dvdj/EngineTools add .)",
+      "Bash(git -C /Users/dvdj/EngineTools status)"
+    ]
+  }
+}
