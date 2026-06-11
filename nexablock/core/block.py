@@ -120,6 +120,14 @@ class Block(ABC):
     def _result(self, label: str, value: float, unit: str,
                 basis: str = "screening", ref: str = "") -> "Result":
         from .quantity import Result
+        if label in self.results:
+            prev = self.results[label]
+            raise ValueError(
+                f"{type(self).__name__}: duplicate result label {label!r} "
+                f"(previous: {prev.value:g} {prev.unit}, "
+                f"new: {value:g} {unit}). "
+                f"Use distinct labels (e.g. {label + ' ' + unit!r})."
+            )
         r = Result(value=value, unit=unit, basis=basis, label=label, reference=ref)
         self.results[label] = r
         return r

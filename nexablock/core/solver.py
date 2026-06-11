@@ -148,6 +148,7 @@ class Solver:
                 if c.dst_block is block:
                     src_stream = c.src_block.outlets[c.src_port].stream
                     block.inlets[c.dst_port].stream = src_stream
+            block.results.clear()      # idempotent compute (recycle re-invokes)
             block.compute()
             log.debug("Computed %s", type(block).__name__)
 
@@ -186,6 +187,7 @@ class Solver:
                     if c.dst_block is block and c not in tears:
                         src_s = c.src_block.outlets[c.src_port].stream
                         block.inlets[c.dst_port].stream = src_s
+                block.results.clear()      # idempotent compute per iteration
                 block.compute()
 
             # Check tear residuals; update using Wegstein

@@ -125,6 +125,20 @@ def test_block_contract():
     assert "Duty" in h.results
 
 
+def test_duplicate_result_label_raises():
+    """Block._result must fail loud on duplicate labels.
+
+    Root cause of the MED 24× bug (m3/day overwritten by m3/h) and the
+    latent gas_turbine NG-consumption overwrite. Distinct labels per
+    metric/unit pair is the convention; silent overwrites are not."""
+    h = Heater(Q_kW=500.0)
+    s = Stream.water_steam(mdot=2.0, T=300.0, P=2e5, h=1.2e5)
+    h.inlets["inlet"].stream = s
+    h.compute()                                              # registers "Duty"
+    with pytest.raises(ValueError, match="duplicate result label"):
+        h._result("Duty", 999.0, "kW", "verified")
+
+
 # ── 4. 2-block recycle loop ────────────────────────────────────────────────────
 
 def test_recycle_converges():
