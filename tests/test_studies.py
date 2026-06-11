@@ -15,7 +15,8 @@ import pytest
 
 from simulators.gt_system.system import GTSystemParams, build_gt_system, summary
 from nexablock.studies            import (ParameterSweep, SweepResult,
-                                          OneAtATimeSensitivity, SensitivityResult)
+                                          OneAtATimeSensitivity, SensitivityResult,
+                                          Scenario, ScenarioRunner, ScenarioResult)
 
 
 # ── fixtures ──────────────────────────────────────────────────────────────────
@@ -214,6 +215,99 @@ def test_bounds_clamp_at_load_100():
     assert e.span > 0
     assert e.dY_dX == e.dY_dX  # not NaN
     assert e.elasticity > 0
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# §7.8 — Scenarios
+# ══════════════════════════════════════════════════════════════════════════════
+
+_SUMMER = {"t_ambient_C": 40.0, "load_pct": 100.0, "t_wb_C": 30.0}
+_WINTER = {"t_ambient_C":  5.0, "load_pct":  40.0, "t_wb_C": 10.0}
+
+
+@pytest.fixture(scope="module")
+def runner(base):
+    return ScenarioRunner(builder=build_gt_system, base_params=base, kpi_fn=summary)
+
+
+@pytest.fixture(scope="module")
+def scenarios_result(runner):
+    return runner.run({"summer peak": _SUMMER, "winter low load": _WINTER})
+
+
+# ── shape ────────────────────────────────────────────────────────────────────
+
+def test_scenarios_table_shape(scenarios_result):
+    assert isinstance(scenarios_result, ScenarioResult)
+    assert len(scenarios_result.points) == 2
+    assert {p.name for p in scenarios_result.points} == {"summer peak", "winter low load"}
+    assert all(p.converged for p in scenarios_result.points)
+
+
+def test_scenarios_kpis_populated(scenarios_result):
+    for p in scenarios_result.points:
+        for k in ("GT actual power kW", "Steam generation t/h", "MED water m3day"):
+            assert k in p.kpis
+
+
+# ── direction sanity: summer (100% load, 40°C) vs winter (40% load, 5°C) ─────
+
+def test_summer_more_steam_than_winter(scenarios_result):
+    steam = scenarios_result.kpi("Steam generation t/h")
+    assert steam["summer peak"] > steam["winter low load"], (
+        f"summer steam {steam['summer peak']:.2f} not > winter {steam['winter low load']:.2f}")
+
+
+def test_summer_more_power_than_winter(scenarios_result):
+    """Even with derate at 40°C, 100% load beats 40% load at 5°C."""
+    power = scenarios_result.kpi("GT actual power kW")
+    assert power["summer peak"] > power["winter low load"]
+
+
+def test_summer_more_water_than_winter(scenarios_result):
+    water = scenarios_result.kpi("MED water m3day")
+    assert water["summer peak"] > water["winter low load"]
+
+
+# ── dict form ≡ Scenario-list form ───────────────────────────────────────────
+
+def test_dict_form_and_list_form_equivalent(runner):
+    dict_result = runner.run({"summer peak": _SUMMER})
+    list_result = runner.run([Scenario("summer peak", _SUMMER)])
+    assert dict_result.points[0].kpis == list_result.points[0].kpis
+
+
+# ── fail-loud safety nets ────────────────────────────────────────────────────
+
+def test_unknown_override_raises(runner):
+    with pytest.raises(ValueError, match="Unknown override"):
+        runner.run({"bogus": {"not_a_field": 1.0}})
+
+
+def test_unknown_override_raises_before_solve(runner):
+    """Validation must fire before any builder call. Wrap builder to track calls."""
+    calls = []
+    def tracking_builder(p):
+        calls.append(p); return build_gt_system(p)
+    r = ScenarioRunner(builder=tracking_builder, base_params=runner.base_params,
+                      kpi_fn=summary)
+    with pytest.raises(ValueError, match="Unknown override"):
+        r.run({"bogus": {"load_pct": 50.0, "not_a_field": 1.0}})
+    assert calls == [], "builder must not be called when an override key is invalid"
+
+
+def test_duplicate_scenario_name_raises(runner):
+    with pytest.raises(ValueError, match="Duplicate scenario name"):
+        runner.run([Scenario("dup", {"load_pct": 80.0}),
+                    Scenario("dup", {"load_pct": 90.0})])
+
+
+# ── diff helper ──────────────────────────────────────────────────────────────
+
+def test_diff_vs_base_zero_for_empty_overrides(runner):
+    r = runner.run({"identity": {}})
+    diffs = r.diff_vs_base("Steam generation t/h")
+    assert diffs["identity"] == pytest.approx(0.0, abs=1e-9)
 
 
 if __name__ == "__main__":
