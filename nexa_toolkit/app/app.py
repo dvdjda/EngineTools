@@ -520,8 +520,16 @@ app.layout = html.Div([
             ], style={**CARD, "marginBottom": "16px"}),
             html.Div([
                 _btn("Download PDF", "b-pdf"), _btn("Download Excel", "b-xlsx"),
+                dcc.Checklist(id="include-study", value=[],
+                              options=[{"label": "  Include latest study",
+                                        "value": "yes"}],
+                              style={"display": "inline-block",
+                                     "marginLeft": "12px",
+                                     "fontSize": "12px",
+                                     "color": GREY}),
                 dcc.Download(id="d-pdf"), dcc.Download(id="d-xlsx"),
-            ]),
+            ], style={"display": "flex", "alignItems": "center",
+                      "flexWrap": "wrap", "gap": "6px"}),
         ], style={"flex": "1"}),
     ], style={"display": "flex", "gap": "20px", "padding": "22px 28px", "maxWidth": "1200px", "margin": "0 auto"}),
 
@@ -666,28 +674,42 @@ def _ai_explain(_n, data, model):
     return html_div, plain_text
 
 
-def _report(data, kind, ai_text=None):
+# Latest study per engine — populated by the study callbacks below, read by
+# _report when the "Include latest study" checkbox is on. Single-process dev
+# server; ephemeral by design (lost on restart).
+_LATEST_STUDY: dict = {}
+
+
+def _report(data, kind, ai_text=None, include_study=False):
     engine = get(data["key"]); vals = data["vals"]; r = engine.solve(vals)
     d = tempfile.mkdtemp(); slug = data["key"]
+    study = _LATEST_STUDY.get(data["key"]) if include_study else None
     if kind == "pdf":
-        p = f"{d}/{slug}.pdf"; build_pdf(engine, vals, r, p, f"{d}/c.png", ai_text=ai_text)
+        p = f"{d}/{slug}.pdf"
+        build_pdf(engine, vals, r, p, f"{d}/c.png", ai_text=ai_text, study=study)
     elif kind == "xlsx":
-        p = f"{d}/{slug}.xlsx"; build_excel(engine, vals, r, p, ai_text=ai_text)
+        p = f"{d}/{slug}.xlsx"
+        build_excel(engine, vals, r, p, ai_text=ai_text, study=study)
     else:
-        p = f"{d}/{slug}.pptx"; build_pptx(engine, vals, r, p, f"{d}/c.png", ai_text=ai_text)
+        p = f"{d}/{slug}.pptx"
+        build_pptx(engine, vals, r, p, f"{d}/c.png", ai_text=ai_text)
     return dcc.send_file(p)
 
 
 @app.callback(Output("d-pdf", "data"), Input("b-pdf", "n_clicks"),
-              State("last", "data"), State("ai-text", "data"), prevent_initial_call=True)
-def _dl_pdf(_n, data, ai_text):
-    return _report(data, "pdf", ai_text=ai_text)
+              State("last", "data"), State("ai-text", "data"),
+              State("include-study", "value"), prevent_initial_call=True)
+def _dl_pdf(_n, data, ai_text, include_study):
+    return _report(data, "pdf", ai_text=ai_text,
+                   include_study=bool(include_study and "yes" in include_study))
 
 
 @app.callback(Output("d-xlsx", "data"), Input("b-xlsx", "n_clicks"),
-              State("last", "data"), State("ai-text", "data"), prevent_initial_call=True)
-def _dl_xlsx(_n, data, ai_text):
-    return _report(data, "xlsx", ai_text=ai_text)
+              State("last", "data"), State("ai-text", "data"),
+              State("include-study", "value"), prevent_initial_call=True)
+def _dl_xlsx(_n, data, ai_text, include_study):
+    return _report(data, "xlsx", ai_text=ai_text,
+                   include_study=bool(include_study and "yes" in include_study))
 
 
 # ─── Studies (sensitivity / sweep / scenarios) ────────────────────────────────
@@ -744,8 +766,11 @@ def _run_study(kind: str, data, sweep_input):
                 step_override = hooks.get("step_override", {}),
             ).run(inputs=hooks["sensitivity_inputs"], kpis=hooks["kpis"])
             kpi = hooks["kpis"][0]
-            tornado_chart(sens, p, kpi=kpi)
-            banner = _msg(f"Sensitivity tornado — {kpi}", NAVY)
+            chart_kwargs = {"kpi": kpi}
+            tornado_chart(sens, p, **chart_kwargs)
+            label = f"Sensitivity tornado — {kpi}"
+            study_result = sens
+            banner = _msg(label, NAVY)
 
         elif kind == "sweep":
             if not sweep_input:
@@ -760,18 +785,23 @@ def _run_study(kind: str, data, sweep_input):
             values = [lo + (hi - lo) * i / (N - 1) for i in range(N)]
             swp = ParameterSweep(hooks["builder"], params, hooks["kpi_fn"]).run(
                 {sweep_input: values})
-            sweep_chart(swp, p, kpis=hooks["kpis"],
-                        title=f"Sweep over {sweep_input}")
-            banner = _msg(f"Sweep over {sweep_input}: {lo:g} → {hi:g}, {N} points", NAVY)
+            chart_kwargs = {"kpis": hooks["kpis"], "title": f"Sweep over {sweep_input}"}
+            sweep_chart(swp, p, **chart_kwargs)
+            label = f"Sweep over {sweep_input}: {lo:g} → {hi:g}, {N} points"
+            study_result = swp
+            banner = _msg(label, NAVY)
 
         elif kind == "scenarios":
             scens = hooks.get("scenarios", {})
             if not scens:
                 return no_update, _msg("No scenarios defined for this engine.", RED)
             res = ScenarioRunner(hooks["builder"], params, hooks["kpi_fn"]).run(scens)
-            scenarios_chart(res, p, kpis=hooks["kpis"],
-                            title="Scenario comparison (ratio vs current settings)")
-            banner = _msg(f"Scenarios: {', '.join(scens.keys())}", NAVY)
+            chart_kwargs = {"kpis": hooks["kpis"],
+                            "title": "Scenario comparison (ratio vs current settings)"}
+            scenarios_chart(res, p, **chart_kwargs)
+            label = f"Scenarios: {', '.join(scens.keys())}"
+            study_result = res
+            banner = _msg(label, NAVY)
         else:
             return no_update, _msg(f"Unknown study kind: {kind}", RED)
 
@@ -780,6 +810,13 @@ def _run_study(kind: str, data, sweep_input):
         print("[STUDY] ERROR:", _tb.format_exc())
         return no_update, _msg(f"Study failed: {e}", RED)
 
+    # Stash the result so the "Include latest study" report path can find it.
+    _LATEST_STUDY[data["key"]] = {
+        "kind":         kind,
+        "result":       study_result,
+        "chart_kwargs": chart_kwargs,
+        "label":        label,
+    }
     return _png_data_uri(p), banner
 
 

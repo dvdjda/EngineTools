@@ -47,6 +47,27 @@ def _parse_ai_sections(ai_text):
 
 
 # ---------- chart ----------
+def _render_study_chart(study, path):
+    """Dispatch to the matching nexablock.studies chart helper.
+
+    Accepts:  study = {"kind": "sensitivity"|"sweep"|"scenarios",
+                       "result": <result>,
+                       "chart_kwargs": dict,
+                       "label": str}
+    Returns:  path to the PNG written. Re-uses the chart helpers shipped
+              in nexablock.studies.charts — no second chart-generation path.
+    """
+    from nexablock.studies import tornado_chart, sweep_chart, scenarios_chart
+    fns = {"sensitivity": tornado_chart,
+           "sweep":       sweep_chart,
+           "scenarios":   scenarios_chart}
+    fn = fns.get(study["kind"])
+    if fn is None:
+        raise ValueError(f"Unknown study kind: {study['kind']!r}")
+    fn(study["result"], path, **study.get("chart_kwargs", {}))
+    return path
+
+
 def build_chart(engine, result, path):
     # If the engine emits SVG but the caller wants a raster (PDF/PPTX),
     # let the engine write SVG to a sibling file and rasterize via cairosvg.
@@ -80,7 +101,7 @@ def build_chart(engine, result, path):
 
 
 # ---------- Excel ----------
-def build_excel(engine, values, result, path, ai_text=None):
+def build_excel(engine, values, result, path, ai_text=None, study=None):
     from openpyxl import Workbook
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
     from openpyxl.chart import BarChart, Reference
@@ -181,12 +202,55 @@ def build_excel(engine, values, result, path, ai_text=None):
             if c.value is not None and (not c.font or c.font.name != "Arial"):
                 f = c.font
                 c.font = Font(name="Arial", bold=f.bold, italic=f.italic, size=f.size, color=f.color)
+    # Optional Study sheet — embed the study chart + the underlying table.
+    if study is not None:
+        ws_s = wb.create_sheet("Study")
+        ws_s["A1"] = study.get("label") or "Study"
+        ws_s["A1"].font = Font(name="Arial", bold=True, size=12, color="FFFFFF")
+        ws_s["A1"].fill = PatternFill("solid", fgColor=HEX_NAVY)
+        ws_s["A1"].alignment = Alignment(vertical="center", indent=1)
+        ws_s.column_dimensions["A"].width = 22
+        for col in "BCDEFGHIJKLMN":
+            ws_s.column_dimensions[col].width = 16
+
+        # Render the study chart (reuses nexablock.studies.charts) and embed.
+        try:
+            study_png = path + ".study.png"
+            _render_study_chart(study, study_png)
+            from openpyxl.drawing.image import Image as XImage
+            ws_s.add_image(XImage(study_png), "A3")
+        except Exception as _e:
+            ws_s["A3"] = f"Study chart omitted: {_e}"
+
+        # Table from result.as_dataframe(); pandas may not be installed.
+        table_start_row = 24                       # leaves room for the image
+        ws_s.cell(table_start_row, 1, "Study data").font = Font(bold=True)
+        try:
+            df = study["result"].as_dataframe()
+            if getattr(df.index, "name", None) or df.index.dtype == object:
+                df = df.reset_index().rename(columns={"index": "scenario"})
+            headers = [str(c) for c in df.columns]
+            for j, h in enumerate(headers):
+                cell = ws_s.cell(table_start_row + 1, j + 1, h)
+                cell.font = Font(bold=True)
+            for i, row in enumerate(df.values.tolist()):
+                for j, val in enumerate(row):
+                    if isinstance(val, float) and (val != val):     # NaN
+                        ws_s.cell(table_start_row + 2 + i, j + 1, None)
+                    else:
+                        ws_s.cell(table_start_row + 2 + i, j + 1, val)
+        except ImportError:
+            ws_s.cell(table_start_row + 1, 1,
+                      "table omitted: pandas not installed")
+        except Exception as _e:
+            ws_s.cell(table_start_row + 1, 1, f"table omitted: {_e}")
+
     wb.save(path)
     return path
 
 
 # ---------- PDF ----------
-def build_pdf(engine, values, result, path, chart_png, ai_text=None):
+def build_pdf(engine, values, result, path, chart_png, ai_text=None, study=None):
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.units import mm
     from reportlab.lib import colors
@@ -248,6 +312,19 @@ def build_pdf(engine, values, result, path, chart_png, ai_text=None):
     story.append(Paragraph("Chart", sec))
     story.append(Image(chart_png, width=W, height=W * 3.5 / 9.2))
     story.append(Spacer(1, 6))
+
+    # Optional study chart appended after the flowsheet chart.
+    if study is not None:
+        try:
+            study_png = chart_png + ".study.png"
+            _render_study_chart(study, study_png)
+            story.append(Spacer(1, 12))
+            story.append(Paragraph(study.get("label") or "Study", sec))
+            story.append(Image(study_png, width=W, height=W * 3.5 / 9.2))
+            story.append(Spacer(1, 6))
+        except Exception as _e:
+            story.append(Paragraph(f"<i>Study chart omitted: {_e}</i>", body))
+
     if engine.notes:
         story.append(Paragraph("Method: " + engine.notes, body))
 
