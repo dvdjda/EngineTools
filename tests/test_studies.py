@@ -423,5 +423,84 @@ def test_gt_load_sweep_engine_chart_writes_png(tmp_path):
     assert "sweep" in r and len(r["sweep"].points) == 11   # 50..100 step 5
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# §7.10 — Engine study_hooks() + UI study button pipe
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _gt_v2_engine():
+    """Load the v2 GT engine and return it."""
+    import nexa_toolkit.engines               # noqa: registers
+    from nexa_toolkit.framework import get
+    return get("gt_system_v2")
+
+
+def test_study_hooks_shape():
+    e = _gt_v2_engine()
+    h = e.study_hooks()
+    for key in ("builder", "make_params", "kpi_fn", "kpis",
+                "sensitivity_inputs", "sweep_inputs", "bounds",
+                "step_override", "scenarios"):
+        assert key in h, f"hooks missing key: {key}"
+    # Callables really callable
+    assert callable(h["builder"])
+    assert callable(h["make_params"])
+    assert callable(h["kpi_fn"])
+    # KPIs are real keys produced by kpi_fn(SolvedSystem)
+    solved = h["builder"](h["make_params"](e.defaults()))
+    kpi_dict = h["kpi_fn"](solved)
+    for k in h["kpis"]:
+        assert k in kpi_dict, f"hook kpi {k!r} not produced by kpi_fn"
+
+
+def test_study_hooks_inherited_by_loadsweep_subclass():
+    import nexa_toolkit.engines
+    from nexa_toolkit.framework import get
+    e = get("gt_system_v2_loadsweep")
+    assert hasattr(e, "study_hooks")
+    h = e.study_hooks()
+    assert "load_pct" in h["sweep_inputs"]
+
+
+def test_study_pipe_sensitivity_via_hooks(tmp_path):
+    """Mimic the UI sensitivity button: drive everything through study_hooks."""
+    e = _gt_v2_engine()
+    h = e.study_hooks()
+    params = h["make_params"](e.defaults())
+    sens = OneAtATimeSensitivity(
+        builder=h["builder"], base_params=params, kpi_fn=h["kpi_fn"],
+        bounds=h["bounds"], step_override=h["step_override"],
+    ).run(inputs=h["sensitivity_inputs"], kpis=h["kpis"])
+    p = tmp_path / "sens_via_hooks.png"
+    tornado_chart(sens, str(p), kpi=h["kpis"][0])
+    _assert_valid_png(p)
+
+
+def test_study_pipe_sweep_via_hooks(tmp_path):
+    """Mimic the UI sweep button (load_pct over its full bounds, 10 points)."""
+    e = _gt_v2_engine()
+    h = e.study_hooks()
+    params = h["make_params"](e.defaults())
+    lo, hi = h["bounds"]["load_pct"]
+    N = 10
+    values = [lo + (hi - lo) * i / (N - 1) for i in range(N)]
+    swp = ParameterSweep(h["builder"], params, h["kpi_fn"]).run({"load_pct": values})
+    p = tmp_path / "sweep_via_hooks.png"
+    sweep_chart(swp, str(p), kpis=h["kpis"])
+    _assert_valid_png(p)
+    assert len(swp.points) == N
+
+
+def test_study_pipe_scenarios_via_hooks(tmp_path):
+    """Mimic the UI scenarios button using the engine's built-in scenarios."""
+    e = _gt_v2_engine()
+    h = e.study_hooks()
+    params = h["make_params"](e.defaults())
+    res = ScenarioRunner(h["builder"], params, h["kpi_fn"]).run(h["scenarios"])
+    p = tmp_path / "scenarios_via_hooks.png"
+    scenarios_chart(res, str(p), kpis=h["kpis"])
+    _assert_valid_png(p)
+    assert len(res.points) == len(h["scenarios"])
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

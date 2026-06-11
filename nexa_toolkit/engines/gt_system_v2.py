@@ -104,3 +104,41 @@ class GTSystemV2(Engine):
         with open(path, "w", encoding="utf-8") as f:
             f.write(render_svg(r["solved"]))
         return path
+
+    def study_hooks(self) -> dict:
+        """Plumbing the studies layer (sweep / sensitivity / scenarios) needs.
+
+        Anything the v1 UI surfaces as a "Run study" button reads this:
+          builder + make_params → produce a SolvedSystem from input dict v
+          kpi_fn                → extract the named KPIs from the solved system
+          kpis                  → which KPIs to plot by default
+          sensitivity_inputs    → inputs to perturb (OAT)
+          sweep_inputs          → inputs offered in the sweep picker dropdown
+          bounds                → physical limits, used for sensitivity clamp and sweep range
+          step_override         → per-input absolute sensitivity step (integer-flavoured fields)
+          scenarios             → built-in named bundles for the scenarios button
+        """
+        return {
+            "builder":      build_gt_system,
+            "make_params":  _params_from,
+            "kpi_fn":       summary,
+            "kpis":         ["GT actual power kW", "Steam generation t/h",
+                             "LiBr cooling kW",    "MED water m3day"],
+            "sensitivity_inputs": ["load_pct", "gt_eff", "libr_frac", "libr_cop",
+                                   "hrsg_eff_pct", "med_effects", "t_ambient_C"],
+            "sweep_inputs": ["load_pct", "gt_eff", "libr_frac", "libr_cop",
+                             "hrsg_eff_pct", "t_ambient_C"],
+            "bounds": {
+                "load_pct":     (10.0, 100.0),
+                "gt_eff":       (0.15,  0.45),
+                "libr_frac":    (0.05,  0.95),
+                "libr_cop":     (0.5,   0.85),
+                "hrsg_eff_pct": (50.0,  95.0),
+                "t_ambient_C":  (-10.0, 55.0),
+            },
+            "step_override": {"med_effects": 1.0},
+            "scenarios": {
+                "summer peak":     {"t_ambient_C": 40.0, "load_pct": 100.0, "t_wb_C": 30.0},
+                "winter low load": {"t_ambient_C":  5.0, "load_pct":  40.0, "t_wb_C": 10.0},
+            },
+        }

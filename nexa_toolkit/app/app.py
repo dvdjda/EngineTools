@@ -25,6 +25,9 @@ from nexa_toolkit.framework import list_engines, get, REGISTRY
 from nexa_toolkit.framework.builder import save_request, scaffold_tool, _slug, load_kinds, add_kind
 from nexa_toolkit.reporting.generic_report import (
     build_chart, build_excel, build_pdf, build_pptx)
+from nexablock.studies import (
+    ParameterSweep, OneAtATimeSensitivity, ScenarioRunner,
+    tornado_chart, sweep_chart, scenarios_chart)
 try:
     from nexa_toolkit.dwsim_export import build_flowsheet as _dwsim_build_flowsheet
 except Exception:
@@ -467,6 +470,37 @@ app.layout = html.Div([
                 dcc.Loading(type="circle", color=TEAL,
                             children=html.Img(id="chart", style={"width": "100%", "borderRadius": "8px"})),
             ], style={**CARD, "marginBottom": "16px"}),
+            html.Div([
+                html.Div("Studies",
+                         style={"fontWeight": "700", "color": NAVY, "fontSize": "14px",
+                                "marginBottom": "10px"}),
+                html.Div([
+                    html.Button("\U0001F300 Sensitivity", id="b-study-sens", n_clicks=0,
+                                style={"padding": "8px 14px", "borderRadius": "7px",
+                                       "fontSize": "13px", "fontWeight": "600",
+                                       "marginRight": "10px", "cursor": "pointer",
+                                       "background": "white", "color": NAVY,
+                                       "border": f"1px solid {NAVY}"}),
+                    html.Button("\U0001F4C8 Sweep", id="b-study-sweep", n_clicks=0,
+                                style={"padding": "8px 14px", "borderRadius": "7px",
+                                       "fontSize": "13px", "fontWeight": "600",
+                                       "marginRight": "6px", "cursor": "pointer",
+                                       "background": "white", "color": NAVY,
+                                       "border": f"1px solid {NAVY}"}),
+                    html.Div(dcc.Dropdown(id="study-sweep-input", clearable=False,
+                                          placeholder="param to sweep",
+                                          style={"fontSize": "12px"}),
+                             style={"width": "200px", "marginRight": "10px",
+                                    "display": "inline-block"}),
+                    html.Button("\U0001F326 Scenarios", id="b-study-scen", n_clicks=0,
+                                style={"padding": "8px 14px", "borderRadius": "7px",
+                                       "fontSize": "13px", "fontWeight": "600",
+                                       "marginRight": "10px", "cursor": "pointer",
+                                       "background": "white", "color": NAVY,
+                                       "border": f"1px solid {NAVY}"}),
+                ], style={"display": "flex", "alignItems": "center", "flexWrap": "wrap",
+                          "gap": "6px"}),
+            ], style={**CARD, "marginBottom": "16px"}),
             html.Div(id="results", style={**CARD, "marginBottom": "16px"}),
             html.Div(id="smart-section", style={"marginBottom": "16px"}),
             html.Div([
@@ -654,6 +688,127 @@ def _dl_pdf(_n, data, ai_text):
               State("last", "data"), State("ai-text", "data"), prevent_initial_call=True)
 def _dl_xlsx(_n, data, ai_text):
     return _report(data, "xlsx", ai_text=ai_text)
+
+
+# ─── Studies (sensitivity / sweep / scenarios) ────────────────────────────────
+
+def _engine_hooks(key: str):
+    """Return (engine, hooks) or (engine, None) if the engine doesn't expose them."""
+    engine = get(key)
+    hooks  = engine.study_hooks() if hasattr(engine, "study_hooks") else None
+    return engine, hooks
+
+
+@app.callback(Output("study-sweep-input", "options"),
+              Output("study-sweep-input", "value"),
+              Input("system", "value"))
+def _populate_sweep_picker(engine_key):
+    if not engine_key:
+        return [], None
+    _, hooks = _engine_hooks(engine_key)
+    if not hooks:
+        return [], None
+    opts = [{"label": k, "value": k} for k in hooks.get("sweep_inputs", [])]
+    return opts, (opts[0]["value"] if opts else None)
+
+
+def _msg(text, color=None):
+    return html.Div(text, style={"color": color or GREY, "fontSize": "12px",
+                                 "fontWeight": "600", "marginBottom": "8px"})
+
+
+def _png_data_uri(path: str) -> str:
+    with open(path, "rb") as f:
+        return "data:image/png;base64," + base64.b64encode(f.read()).decode()
+
+
+def _run_study(kind: str, data, sweep_input):
+    """Build the appropriate study chart and return (chart_src, banner)."""
+    if not data:
+        return no_update, _msg("Run the engine first, then use Studies.")
+    engine, hooks = _engine_hooks(data["key"])
+    if not hooks:
+        return no_update, _msg("This engine doesn't expose study_hooks.", RED)
+
+    vals   = data["vals"]
+    params = hooks["make_params"](vals)
+    d = tempfile.mkdtemp(); p = os.path.join(d, f"study_{kind}.png")
+
+    try:
+        if kind == "sensitivity":
+            sens = OneAtATimeSensitivity(
+                builder       = hooks["builder"],
+                base_params   = params,
+                kpi_fn        = hooks["kpi_fn"],
+                bounds        = hooks.get("bounds", {}),
+                step_override = hooks.get("step_override", {}),
+            ).run(inputs=hooks["sensitivity_inputs"], kpis=hooks["kpis"])
+            kpi = hooks["kpis"][0]
+            tornado_chart(sens, p, kpi=kpi)
+            banner = _msg(f"Sensitivity tornado — {kpi}", NAVY)
+
+        elif kind == "sweep":
+            if not sweep_input:
+                return no_update, _msg("Pick an input to sweep first.", RED)
+            bounds = hooks.get("bounds", {})
+            if sweep_input in bounds:
+                lo, hi = bounds[sweep_input]
+            else:
+                base_v = float(vals[sweep_input])
+                lo, hi = base_v * 0.8, base_v * 1.2
+            N = 10
+            values = [lo + (hi - lo) * i / (N - 1) for i in range(N)]
+            swp = ParameterSweep(hooks["builder"], params, hooks["kpi_fn"]).run(
+                {sweep_input: values})
+            sweep_chart(swp, p, kpis=hooks["kpis"],
+                        title=f"Sweep over {sweep_input}")
+            banner = _msg(f"Sweep over {sweep_input}: {lo:g} → {hi:g}, {N} points", NAVY)
+
+        elif kind == "scenarios":
+            scens = hooks.get("scenarios", {})
+            if not scens:
+                return no_update, _msg("No scenarios defined for this engine.", RED)
+            res = ScenarioRunner(hooks["builder"], params, hooks["kpi_fn"]).run(scens)
+            scenarios_chart(res, p, kpis=hooks["kpis"],
+                            title="Scenario comparison (ratio vs current settings)")
+            banner = _msg(f"Scenarios: {', '.join(scens.keys())}", NAVY)
+        else:
+            return no_update, _msg(f"Unknown study kind: {kind}", RED)
+
+    except Exception as e:
+        import traceback as _tb
+        print("[STUDY] ERROR:", _tb.format_exc())
+        return no_update, _msg(f"Study failed: {e}", RED)
+
+    return _png_data_uri(p), banner
+
+
+@app.callback(Output("chart", "src", allow_duplicate=True),
+              Output("banner", "children", allow_duplicate=True),
+              Input("b-study-sens", "n_clicks"),
+              State("last", "data"),
+              prevent_initial_call=True)
+def _on_study_sens(_n, data):
+    return _run_study("sensitivity", data, None)
+
+
+@app.callback(Output("chart", "src", allow_duplicate=True),
+              Output("banner", "children", allow_duplicate=True),
+              Input("b-study-sweep", "n_clicks"),
+              State("last", "data"),
+              State("study-sweep-input", "value"),
+              prevent_initial_call=True)
+def _on_study_sweep(_n, data, sweep_input):
+    return _run_study("sweep", data, sweep_input)
+
+
+@app.callback(Output("chart", "src", allow_duplicate=True),
+              Output("banner", "children", allow_duplicate=True),
+              Input("b-study-scen", "n_clicks"),
+              State("last", "data"),
+              prevent_initial_call=True)
+def _on_study_scen(_n, data):
+    return _run_study("scenarios", data, None)
 
 
 if __name__ == "__main__":
