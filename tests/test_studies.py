@@ -14,7 +14,8 @@ from dataclasses import replace
 import pytest
 
 from simulators.gt_system.system import GTSystemParams, build_gt_system, summary
-from nexablock.studies            import ParameterSweep, SweepResult
+from nexablock.studies            import (ParameterSweep, SweepResult,
+                                          OneAtATimeSensitivity, SensitivityResult)
 
 
 # ── fixtures ──────────────────────────────────────────────────────────────────
@@ -81,6 +82,138 @@ def test_unknown_param_raises(base):
     sweep = ParameterSweep(builder=build_gt_system, base_params=base, kpi_fn=summary)
     with pytest.raises(ValueError, match="Unknown parameter"):
         sweep.run({"not_a_field": [1, 2]})
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# §7.7 — One-at-a-time sensitivity
+# ══════════════════════════════════════════════════════════════════════════════
+
+_BOUNDS = {
+    "load_pct":     (10.0, 100.0),
+    "libr_frac":    (0.05, 0.95),
+    "gt_eff":       (0.15, 0.45),
+    "hrsg_eff_pct": (50.0, 95.0),
+    "libr_cop":     (0.5,  0.85),
+}
+
+_KPIS = [
+    "GT actual power kW",
+    "Steam generation t/h",
+    "LiBr cooling kW",
+    "MED water m3day",
+]
+
+
+@pytest.fixture(scope="module")
+def sens(base):
+    s = OneAtATimeSensitivity(
+        builder=build_gt_system, base_params=base, kpi_fn=summary,
+        rel_step=0.01, abs_step=0.01,
+        bounds=_BOUNDS,
+        step_override={"med_effects": 1.0},
+    )
+    return s.run(
+        inputs=["load_pct", "gt_eff", "libr_frac", "libr_cop",
+                "hrsg_eff_pct", "med_effects", "t_ambient_C"],
+        kpis  =_KPIS,
+    )
+
+
+def _e(result, kpi, inp):
+    """Pull the single entry for (inp, kpi)."""
+    for ent in result.entries:
+        if ent.input == inp and ent.kpi == kpi:
+            return ent
+    raise AssertionError(f"no entry for input={inp!r} kpi={kpi!r}")
+
+
+# ── plumbing ──────────────────────────────────────────────────────────────────
+
+def test_sens_returns_one_entry_per_pair(sens):
+    assert isinstance(sens, SensitivityResult)
+    assert len(sens.entries) == 7 * len(_KPIS)
+    assert all(e.error is None for e in sens.entries)
+
+
+def test_sens_base_kpis_present(sens):
+    for k in _KPIS:
+        assert k in sens.base_kpis
+
+
+# ── sign sanity at the base point ────────────────────────────────────────────
+
+def test_dSteam_dLoad_positive(sens):
+    assert _e(sens, "Steam generation t/h", "load_pct").elasticity > 0
+
+
+def test_dWater_dMEDeffects_positive(sens):
+    assert _e(sens, "MED water m3day", "med_effects").elasticity > 0
+
+
+def test_dWater_dLibrFrac_negative(sens):
+    """More steam to LiBr leaves less for MED."""
+    assert _e(sens, "MED water m3day", "libr_frac").elasticity < 0
+
+
+def test_dCool_dLibrCOP_positive(sens):
+    assert _e(sens, "LiBr cooling kW", "libr_cop").elasticity > 0
+
+
+def test_dPower_dAmbient_negative(sens):
+    """GT derate kicks in above 15°C — warmer ambient → less power."""
+    assert _e(sens, "GT actual power kW", "t_ambient_C").elasticity < 0
+
+
+def test_dCool_dLibrFrac_positive(sens):
+    assert _e(sens, "LiBr cooling kW", "libr_frac").elasticity > 0
+
+
+# ── magnitude sanity ─────────────────────────────────────────────────────────
+
+def test_power_load_elasticity_near_one(sens):
+    """P_GT scales linearly with load_pct (after derate, before COP). ε ≈ 1.0."""
+    eps = _e(sens, "GT actual power kW", "load_pct").elasticity
+    assert abs(eps - 1.0) < 0.05, f"expected ε≈1.0, got {eps:.4f}"
+
+
+def test_cool_libr_cop_elasticity_near_one(sens):
+    """Q_cool = Q_gen × COP → ε(cool, cop) ≈ 1.0."""
+    eps = _e(sens, "LiBr cooling kW", "libr_cop").elasticity
+    assert abs(eps - 1.0) < 0.05, f"expected ε≈1.0, got {eps:.4f}"
+
+
+# ── tornado helper ───────────────────────────────────────────────────────────
+
+def test_tornado_sorted_descending_by_magnitude(sens):
+    tor = sens.tornado("MED water m3day")
+    mags = [abs(e.elasticity) for e in tor if not (e.elasticity != e.elasticity)]
+    for a, b in zip(mags, mags[1:]):
+        assert a >= b, f"tornado not monotonic: {mags}"
+
+
+# ── edge cases ───────────────────────────────────────────────────────────────
+
+def test_sens_unknown_input_raises(base):
+    s = OneAtATimeSensitivity(
+        builder=build_gt_system, base_params=base, kpi_fn=summary)
+    with pytest.raises(ValueError, match="Unknown parameter"):
+        s.run(inputs=["not_a_field"], kpis=["Steam generation t/h"])
+
+
+def test_bounds_clamp_at_load_100():
+    """Base load_pct=99.5 with bounds (10,100): high clamps to 100, low at ~98.5.
+    span < 2h, dY/dX still finite."""
+    base = GTSystemParams(load_pct=99.5)
+    s = OneAtATimeSensitivity(
+        builder=build_gt_system, base_params=base, kpi_fn=summary,
+        rel_step=0.01, bounds={"load_pct": (10.0, 100.0)})
+    r = s.run(inputs=["load_pct"], kpis=["Steam generation t/h"])
+    e = r.entries[0]
+    assert e.high_input == 100.0, f"upper should clamp to 100, got {e.high_input}"
+    assert e.low_input  < 99.5
+    assert e.span > 0
+    assert e.dY_dX == e.dY_dX  # not NaN
+    assert e.elasticity > 0
 
 
 if __name__ == "__main__":
