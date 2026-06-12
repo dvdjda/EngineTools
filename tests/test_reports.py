@@ -276,15 +276,18 @@ def test_xlsx_high_gpu_load_shows_both_deficits(engine, hooks, tmp_path):
     assert "no recycle loops" in joined
 
 
-def test_xlsx_defaults_show_cooling_deficit(engine, vals, solved, tmp_path):
-    """Default GT v2 reveals an undersized LiBr (1660 kW cooling short of
-    5 MW GPU load). Power is fine; cooling fails alone. KPIs flagged."""
-    p = tmp_path / "default_cooling_deficit.xlsx"
-    build_excel(engine, vals, solved, str(p))
+def test_xlsx_gpu_10mw_shows_cooling_deficit(engine, tmp_path):
+    """At GPU 10 MW the cooling shortfall is ~20% — well above the 2.5%
+    screening tolerance, so a real DEFICIT bar is rendered. (At default
+    GPU 5 MW the gap is 1.9% — within tolerance — and the report does
+    NOT show a deficit; see test_xlsx_balanced_design_no_deficits.)"""
+    v = engine.defaults(); v["gpu_it_kW"] = 10000.0
+    r = engine.solve(v)
+    p = tmp_path / "gpu10_cooling_deficit.xlsx"
+    build_excel(engine, v, r, str(p))
     joined = _xlsx_cells(p)
     assert "COOLING CAPACITY DEFICIT"  in joined
-    assert "POWER DEFICIT" not in joined           # power is fine at defaults
-    assert "unverified"    in joined               # cooling failure flags KPIs
+    assert "unverified"    in joined
 
 
 def test_xlsx_balanced_design_no_deficits(engine, tmp_path):

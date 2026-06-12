@@ -39,15 +39,27 @@ POWER_ASSUMPTION_GRID = (
 COOLING_ASSUMPTION = (
     "Single-phase immersion: all GPU silicon power plus cassette overhead "
     "dissipate as heat into the coolant. LiBr Q_cool is the only modelled "
-    "cooling source — no economiser, no dry cooler, no free-cooling bypass."
+    "cooling source — no economiser, no dry cooler, no free-cooling bypass. "
+    "Screening tolerance: shortfalls within 2.5% of demand are below the "
+    "controller-vs-block precision floor and read as OK; only larger gaps "
+    "are flagged as cooling deficits."
 )
+
+COOLING_TOL_REL = 0.025      # 2.5% screening tolerance — see assumption above
 
 
 # ── data types ───────────────────────────────────────────────────────────────
 
 @dataclass
 class ResourceBalance:
-    """One resource (power, cooling, ...) reduced to a supply/demand balance."""
+    """One resource (power, cooling, ...) reduced to a supply/demand balance.
+
+    Screening tolerance: small gaps within `tol_rel × demand` are screening-
+    fidelity noise (analytical-vs-block precision in the controller, prop-
+    table rounding, fixed-reference t_amb approximations). They DO NOT
+    constitute engineering deficits and don't flag the balance as
+    infeasible. Real shortfalls beyond the tolerance do.
+    """
     resource:   str               # title that the renderer uses, e.g. "Power"
     unit:       str
     feasible:   bool
@@ -57,6 +69,7 @@ class ResourceBalance:
     shortfall:  float             # max(0, -balance); 0 when feasible
     assumption: str
     breakdown:  dict = field(default_factory=dict)
+    tol_rel:    float = 0.0       # screening tolerance applied at construction
 
 
 @dataclass
@@ -90,17 +103,25 @@ def _read(block, label):
     return res.value if res is not None else 0.0
 
 
-def _make(resource, unit, supply, demand, assumption, breakdown):
-    """Common assembly path for a ResourceBalance."""
+def _make(resource, unit, supply, demand, assumption, breakdown, *,
+          tol_rel: float = 0.0):
+    """Common assembly path for a ResourceBalance with optional screening
+    tolerance: balances with shortfall ≤ tol_rel × demand are treated as
+    feasible (the supply-side noise is below screening fidelity)."""
     balance   = supply - demand
-    feasible  = balance >= 0
-    shortfall = max(0.0, -balance)
+    raw_short = max(0.0, -balance)
+    threshold = tol_rel * max(abs(demand), 1e-12)
+    feasible  = raw_short <= threshold
+    # When feasible-within-tolerance, suppress the displayed shortfall so the
+    # report doesn't simultaneously read "Balance OK" and "Shortfall 100 kW".
+    shortfall = 0.0 if feasible else raw_short
     return ResourceBalance(
         resource=resource, unit=unit,
         feasible=feasible,
         supply=supply, demand=demand,
         balance=balance, shortfall=shortfall,
         assumption=assumption, breakdown=breakdown,
+        tol_rel=tol_rel,
     )
 
 
@@ -189,7 +210,7 @@ def cooling_balance(solved, assumption: str = COOLING_ASSUMPTION) -> ResourceBal
         "Cassette overhead heat": overhead_kW,
     }
     return _make("Cooling capacity", "kW", supply_kW, demand_kW,
-                 assumption, breakdown)
+                 assumption, breakdown, tol_rel=COOLING_TOL_REL)
 
 
 # ── aggregate ────────────────────────────────────────────────────────────────

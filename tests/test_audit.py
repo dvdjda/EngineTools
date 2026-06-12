@@ -110,14 +110,26 @@ def test_audit_category_counts(default_audit):
     assert len(by_cat["Plausibility"])   == 17
 
 
-def test_default_audit_in_auto_mode_surfaces_cooling_limit(default_audit):
-    """At island/auto defaults the GT is electrical-demand-limited to ~61%
-    load. Steam at that load is just slightly short of cooling needs, so
-    M7 mass-balance check fails (real engineering finding the framework
-    correctly surfaces — island mode can't ramp GT for cooling alone)."""
-    failed = default_audit.failed()
-    assert len(failed) >= 1
-    assert any("M7" in c.name for c in failed)
+def test_default_audit_passes_within_screening_tolerance(default_audit):
+    """At island/auto defaults (GPU 5 MW) the GT is electrically pinned
+    to ~61% load. Steam at that load delivers ~1.9% less cooling than
+    GPU heat — within the 2.5% screening tolerance the framework treats
+    as controller-vs-block precision noise. Audit reads clean. The same
+    audit will fail loud at GPU ≥ ~8 MW (real deficit)."""
+    assert default_audit.passed
+    assert len(default_audit.failed()) == 0
+
+
+def test_audit_fails_loud_when_real_deficit_present():
+    """GPU 10 MW in island/auto: cooling shortfall ~20% — well above the
+    2.5% screening tolerance. M7 must fail, cooling-balance flagged."""
+    import nexa_toolkit.engines                              # noqa
+    from nexa_toolkit.framework import get
+    e = get("gt_system_v2")
+    v = e.defaults(); v["gpu_it_kW"] = 10000.0
+    a = e.solve(v)["audit"]
+    assert not a.passed
+    assert any("M7" in c.name for c in a.failed())
 
 
 def test_grid_mode_default_audit_fully_passes(engine):

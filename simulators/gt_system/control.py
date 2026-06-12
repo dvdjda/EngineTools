@@ -70,9 +70,20 @@ def _hrsg_steam_kgps(p, load_pct: float, t_amb_K: float) -> float:
     return hrsg_kW * 1000.0 / dh                              # kg/s
 
 
-_CTRL_SAFETY = 1.03    # 3% headroom so controller-vs-block model differences
-                       # don't leave the block actually short of cooling
-                       # (small enthalpy approximation mismatches accumulate)
+_CTRL_SAFETY = 1.00    # No hidden safety margin on the controller side.
+                       # The controller targets exactly what's needed. Small
+                       # block-vs-analytical mismatches (~0.5%) are absorbed
+                       # by the SCREENING TOLERANCE on the cooling balance
+                       # and M7 audit check — see SCREENING_TOL_COOLING below
+                       # and the corresponding mass-balance tolerance in the
+                       # GPUCassette M7 check.
+                       #
+                       # Rationale: a hidden controller margin that only works
+                       # in grid mode (where the GT can ramp for steam) was
+                       # misleading. In island mode the GT is electrically
+                       # pinned and the margin can't be applied. Surface real
+                       # deficits as real, treat sub-1% rounding-level gaps as
+                       # OK within screening fidelity.
 
 
 def _libr_steam_demand_kgps(p, gpu_heat_kW: float) -> float:

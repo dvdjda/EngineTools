@@ -100,13 +100,31 @@ def test_auto_libr_frac_is_residual_steam_balancer():
     assert 0.0 < cs.libr_frac <= 1.0
 
 
-def test_small_gpu_leaves_steam_for_med():
-    """Small GPU → LiBr needs less steam → libr_frac < 1.0 → MED gets some."""
-    solved = _solve(gpu_it_kW=1000.0, operating_mode="grid_tied")
+def test_external_load_pushes_gt_up_so_med_gets_residual_steam():
+    """In auto mode the controller sizes the GT to just cover cooling needs
+    plus a safety margin — MED gets ~no steam by default. To get residual
+    steam to MED you need extra electrical demand (island external load,
+    or manual mode with higher load_pct). With a big island external load
+    pushing the GT well above what cooling alone needs, libr_frac drops
+    below 1.0 and MED produces water."""
+    solved = _solve(gpu_it_kW=3000.0,
+                     operating_mode="island",
+                     external_load_kW=5000.0)
     cs = solved.control
     k = summary(solved)
-    assert cs.libr_frac < 1.0
+    assert cs.libr_frac < 1.0, (
+        f"external load should have pushed GT up enough to leave residual; "
+        f"libr_frac = {cs.libr_frac}")
     assert k["MED water m3day"] > 0
+
+
+def test_manual_mode_with_split_lets_med_produce_water():
+    """Manual mode with libr_frac=0.5 always gives MED half the steam."""
+    solved = _solve(gpu_it_kW=5000.0,
+                     gt_power_mode="manual", load_pct=85.0,
+                     steam_split_mode="manual", libr_frac=0.5)
+    assert solved.control.libr_frac == 0.5
+    assert summary(solved)["MED water m3day"] > 0
 
 
 # ── summary reflects the resolved control state ─────────────────────────────

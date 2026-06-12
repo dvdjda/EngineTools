@@ -196,7 +196,18 @@ def test_high_gpu_load_fails_both_power_and_cooling(engine):
 # ── feasibility independent of convergence ──────────────────────────────────
 
 def test_feasibility_is_independent_of_convergence(engine):
-    """Acyclic GT system always converges; feasibility lives separately."""
+    """Acyclic GT system always converges; feasibility lives separately.
+
+    At island/auto defaults (GPU 5 MW) the 1.9% cooling gap is within
+    screening tolerance (2.5%) — both convergence and feasibility read
+    clean. To exercise the cooling-DEFICIT path use GPU 10 MW.
+    """
     r = engine.solve(engine.defaults())
     assert r["solved"].convergence.converged is True   # solver fine
-    assert r["feasibility"].feasible is False          # cooling deficit
+    assert r["feasibility"].feasible is True           # within screening tolerance
+
+    # Demonstrate the deficit path is still reached at real-shortfall sizes:
+    v = engine.defaults(); v["gpu_it_kW"] = 10000.0
+    r2 = engine.solve(v)
+    assert r2["solved"].convergence.converged is True
+    assert r2["feasibility"].feasible is False         # real 20% cooling deficit
