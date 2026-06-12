@@ -491,15 +491,52 @@ def build_smart_section(engine, v, r):
         ], style={"marginBottom": "14px"}))
 
     # --- inputs used ---
-    rows = [html.Tr([
-        html.Td(spec.label,
-                style={"padding": "4px 8px", "fontSize": "12px", "color": INK}),
-        html.Td(f"{v[spec.key]:g} {spec.unit}",
-                style={"padding": "4px 8px", "fontSize": "12px",
-                       "textAlign": "right", "color": NAVY, "fontWeight": "600"}),
-        html.Td((f"range {spec.min:g}\u2013{spec.max:g}" if spec.min is not None else ""),
-                style={"padding": "4px 8px", "fontSize": "11px", "color": GREY}),
-    ]) for spec in engine.inputs]
+    # If the engine returns a SolvedSystem with a resolved control state
+    # (gt_system_v2 in auto modes), hide the manual inputs whose values are
+    # ignored at this operating point and append the auto-derived equivalents
+    # below \u2014 same logic the report's Design point uses, kept in sync so the
+    # UI section reads as the ACTUAL operating point, not stale defaults.
+    solved = r.get("solved") if isinstance(r, dict) else None
+    cs = getattr(solved, "control", None) if solved is not None else None
+    op_mode = getattr(solved, "operating_mode", "island") if solved is not None else "island"
+
+    def _input_tr(label, value_text, hint=""):
+        return html.Tr([
+            html.Td(label,
+                    style={"padding": "4px 8px", "fontSize": "12px", "color": INK}),
+            html.Td(value_text,
+                    style={"padding": "4px 8px", "fontSize": "12px",
+                           "textAlign": "right", "color": NAVY, "fontWeight": "600"}),
+            html.Td(hint,
+                    style={"padding": "4px 8px", "fontSize": "11px", "color": GREY}),
+        ])
+
+    rows = []
+    for spec in engine.inputs:
+        # Mode-suppressed inputs \u2014 their UI value is inert at this op point.
+        if cs is not None:
+            if spec.key == "load_pct"         and cs.derived_load_pct:    continue
+            if spec.key == "libr_frac"        and cs.derived_libr_frac:   continue
+            if spec.key == "external_load_kW" and op_mode == "grid_tied": continue
+        hint = (f"range {spec.min:g}\u2013{spec.max:g}"
+                 if spec.min is not None else "")
+        rows.append(_input_tr(spec.label, f"{v[spec.key]:g} {spec.unit}", hint))
+
+    # Auto-derived rows shown distinctively at the bottom of the table.
+    if cs is not None:
+        if cs.derived_load_pct:
+            rows.append(_input_tr("GT load_pct  (Auto-derived)",
+                                   f"{cs.load_pct:.1f} %",
+                                   "computed from NEXA + mode"))
+        if cs.derived_libr_frac:
+            rows.append(_input_tr("libr_frac  (Auto-derived)",
+                                   f"{cs.libr_frac:.3f}",
+                                   "LiBr-priority \u00b7 MED residual"))
+        if op_mode == "grid_tied":
+            rows.append(_input_tr("Grid export  (Auto)",
+                                   f"{cs.grid_export_kW:.0f} kW",
+                                   "supply \u2212 NEXA demand \u00b7 export-only"))
+
     parts.append(html.Div([
         html.Div("Inputs used",
                  style={"fontWeight": "700", "color": NAVY,
