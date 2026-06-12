@@ -95,10 +95,11 @@ class MED(Block):
         m3ph = mdot_dist * 3600  / 1000                     # m³/h
         p_elec = _SEC * m3pd / 24 * 1e3                     # W
 
-        # Seawater feed (override from inlet if connected)
-        sw_s = self._in("seawater")
-        if sw_s is not None:
-            mdot_sw = sw_s.mdot; sw_t = sw_s.T
+        # NB: the seawater inlet seed (if connected) is a solver-side tear
+        # initialiser only — the actual seawater required is computed from
+        # distillate / recovery and reported below. Overriding mdot_sw here
+        # used to desynchronise "Seawater feed" from "Brine reject" since the
+        # brine outlet was already built from the unforced value.
 
         self._out_set("condensate", Stream.water_steam(
             mdot=s.mdot, T=t_cond_K, P=_P_ATM,
@@ -123,3 +124,54 @@ class MED(Block):
         return [Reference(
             "El-Dessouky & Ettouney — Fundamentals of Salt Water Desalination (2002)",
             kind="standard")]
+
+    # ── audit ───────────────────────────────────────────────────────────────
+
+    def audit_checks(self) -> list:
+        from ..audit import (mass_balance, energy_balance, pass_fail,
+                              bounds_check)
+        r = self.results
+        gor       = r["GOR"].value
+        q_med     = r["MED thermal input"].value          # kW
+        mdot_dist = r["Water production m3/h"].value * 1000.0 / 3600.0   # m³/h → kg/s
+        mdot_sw   = r["Seawater feed"].value * 1000.0 / 3600.0
+        mdot_br   = r["Brine reject"].value * 1000.0 / 3600.0
+        n_eff     = int(round(self._p("n_effects")))
+        sw_t_C    = self._p("sw_t") - 273.15
+        recovery  = self._p("recovery")
+        steam_in  = self.inlets["steam_in"].stream
+        steam_mdot = steam_in.mdot if steam_in is not None and steam_in.mdot else 0.0
+        # Latent heat of vapourisation at 1 atm ≈ 2257 kJ/kg
+        h_fg      = 2257.0   # kJ/kg
+        # MED steam side T (~100 °C at 1 atm screening)
+        t_steam_low_C = 100.0
+        # Brine T (block sets 333.15 K = 60 °C)
+        t_brine_C = 60.0
+        return [
+            energy_balance("E8: Q_steam ≈ ṁ_dist · h_fg / GOR  (screening)",
+                supply=q_med,
+                demand=mdot_dist * h_fg / max(gor, 1e-6),
+                affects=["MED water production"], tol_rel=0.15),
+            mass_balance("M4: seawater = distillate + brine",
+                supply=mdot_sw, demand=mdot_dist + mdot_br,
+                affects=["MED water production"], tol_rel=5e-3),
+            bounds_check("M5: GOR in (4, 10) screening band",
+                value=gor, lo=4.0, hi=10.0, unit="-",
+                category="Mass closure",
+                affects=["MED water production"]),
+            pass_fail("T4: ΔT per effect ≥ 3°C",
+                passed=(t_steam_low_C - sw_t_C) / max(n_eff, 1) >= 3.0,
+                detail=f"(T_steam {t_steam_low_C:.0f} − T_sw {sw_t_C:.0f}) / "
+                       f"{n_eff} = {(t_steam_low_C-sw_t_C)/max(n_eff,1):.2f}°C",
+                category="Second law", affects=["MED water production"]),
+            pass_fail("T10: T_brine > T_seawater (concentration step)",
+                passed=t_brine_C > sw_t_C,
+                detail=f"T_brine={t_brine_C:.0f}°C > T_sw={sw_t_C:.0f}°C",
+                category="Second law", affects=["MED water production"]),
+            bounds_check("P5: GOR plausibility (4, 10)",
+                value=gor, lo=4.0, hi=10.0, unit="-",
+                affects=["MED water production"]),
+            bounds_check("P6: recovery in (0, 0.5)",
+                value=recovery, lo=0.0, hi=0.5, unit="-",
+                affects=["MED water production"]),
+        ]

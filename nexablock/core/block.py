@@ -73,6 +73,13 @@ class Block(ABC):
         """Relative (x,y) anchor per port for SVG layout. Default: auto."""
         return {}
 
+    def audit_checks(self) -> list:
+        """Return a list of CheckResult instances describing this block's
+        contribution to the post-solve audit (mass/energy closures, second-law
+        feasibility, plausibility bounds). Default: empty. Override per block
+        to declare what this block vouches for."""
+        return []
+
     # ── accessors (lazy, cached) ──────────────────────────────────────────────
 
     @property

@@ -73,6 +73,7 @@ class CoolingTower(Block):
             label="CT supply water"))
 
         fan_kW = self._p("fan_frac") * q_W / 1e3      # electrical aux
+        self._ct_return = self.inlets["ct_return"].stream    # snapshot for audit
 
         self._result("CT heat duty",       q_W/1e3,     "kW",  "verified")
         self._result("CT water flow",      mdot*3.6,    "m³/h","verified")
@@ -82,3 +83,24 @@ class CoolingTower(Block):
         self._result("Wet-bulb temp",      t_wb-273.15, "°C",  "input")
         self._result("CT fan electrical",  fan_kW,      "kW",  "screening",
                      "fan_frac × rejected heat (screening)")
+
+    # ── audit ───────────────────────────────────────────────────────────────
+
+    def audit_checks(self) -> list:
+        from ..audit import mass_balance, pass_fail
+        r = self.results
+        t_sup = r["CT supply temp"].value
+        t_wb  = r["Wet-bulb temp"].value
+        # Optional return flow check — if connected, mass should match supply.
+        m_sup = self.outlets["ct_supply"].stream.mdot if self.outlets["ct_supply"].stream else 0.0
+        m_ret = (self._ct_return.mdot if getattr(self, "_ct_return", None)
+                                          and self._ct_return.mdot else m_sup)
+        return [
+            mass_balance("M8: ct supply = ct return (no evaporation modelled)",
+                supply=m_sup, demand=m_ret,
+                affects=["LiBr cooling capacity"], tol_rel=1e-3),
+            pass_fail("T5: CT supply > wet-bulb (approach > 0)",
+                passed=t_sup > t_wb,
+                detail=f"T_supply={t_sup:.1f}°C > T_wb={t_wb:.1f}°C",
+                category="Second law", affects=["LiBr cooling capacity"]),
+        ]

@@ -112,3 +112,50 @@ class GasTurbine(Block):
     def references(self):
         return [Reference("ISO 3977-2  Performance testing for gas turbines",
                           kind="standard")]
+
+    # ── audit ───────────────────────────────────────────────────────────────
+
+    def audit_checks(self) -> list:
+        from ..audit import energy_balance, pass_fail, bounds_check
+        r = self.results
+        p_actual = r["GT actual power"].value
+        p_derate = r["GT derated capacity"].value
+        fuel_kW  = r["Fuel energy input"].value
+        exh_kW   = r["Exhaust heat"].value
+        gt_cw_kW = r["GT cooling water"].value
+        ng_kgph  = r["NG consumption kg/h"].value
+        eff      = self._p("gt_eff")
+        derate   = r["Derate factor"].value
+        load_pct = self._p("load_pct")
+        t_amb_K  = self._p("t_amb_K"); t_exh_K = self._p("t_exh_K")
+        ng_kgps  = ng_kgph / 3600.0
+        fuel_via_ng_kW = ng_kgps * (_NG_LHV / 1000.0)             # NG → fuel kW
+        return [
+            energy_balance("E1: NG · LHV · η = GT actual power",
+                supply=fuel_via_ng_kW * eff, demand=p_actual,
+                affects=["GT actual power", "NG consumption"], tol_rel=5e-3),
+            energy_balance("E2: fuel = power + exhaust + GT cooling water",
+                supply=fuel_kW, demand=p_actual + exh_kW + gt_cw_kW,
+                affects=["GT actual power"], tol_rel=5e-3),
+            energy_balance("M6: NG fuel/combustion → GT power closure",
+                supply=fuel_via_ng_kW * eff, demand=p_actual,
+                affects=["NG consumption"], tol_rel=5e-3),
+            pass_fail("T8: GT exhaust > T_ambient + 100°C",
+                passed=(t_exh_K - t_amb_K) > 100.0,
+                detail=f"T_exh={t_exh_K-273.15:.0f}°C, T_amb={t_amb_K-273.15:.0f}°C, "
+                       f"ΔT={t_exh_K-t_amb_K:.0f}°C",
+                category="Second law", affects=["GT actual power"]),
+            bounds_check("P1: GT efficiency in (0, 0.55)",
+                value=eff, lo=0.0, hi=0.55, unit="-",
+                affects=["GT actual power"]),
+            bounds_check("P2: derate factor in (0, 1]",
+                value=derate, lo=1e-3, hi=1.0, unit="-",
+                affects=["GT actual power"]),
+            bounds_check("P3: load_pct in [10, 100]",
+                value=load_pct, lo=10.0, hi=100.0, unit="%",
+                affects=["GT actual power"]),
+            pass_fail("P11: GT actual ≤ GT derated capacity",
+                passed=p_actual <= p_derate + 1e-6,
+                detail=f"actual={p_actual:.0f} kW ≤ derated={p_derate:.0f} kW",
+                category="Plausibility", affects=["GT actual power"]),
+        ]

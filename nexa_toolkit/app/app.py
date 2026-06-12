@@ -122,6 +122,57 @@ def _feasibility_status(r):
     return r.get("feasibility") if isinstance(r, dict) else None
 
 
+def _audit_status(r):
+    """Return r['audit'] (AuditStatus) if engine surfaces it."""
+    return r.get("audit") if isinstance(r, dict) else None
+
+
+def audit_card(r):
+    """Audit status card. Green: N/N passed. Red: lists failed checks."""
+    a = _audit_status(r)
+    if a is None:
+        return html.Div()
+    GREEN = "#2E7D4E"
+    n  = len(a.checks); ok = sum(1 for c in a.checks if c.passed)
+    if a.passed:
+        return html.Div([
+            html.Span("✓ ", style={"fontWeight": "800", "fontSize": "16px",
+                                    "color": GREEN}),
+            html.Span("Audit", style={"fontWeight": "700", "fontSize": "14px",
+                                       "color": GREEN, "marginRight": "10px"}),
+            html.Span(f"{ok}/{n} checks passed",
+                      style={"fontSize": "13px", "color": INK}),
+        ], style={
+            "background": "#EAF7EE", "border": f"1px solid {GREEN}",
+            "borderRadius": "8px", "padding": "10px 14px",
+            "marginBottom": "14px",
+        })
+    failed = a.failed()
+    items = [html.Li(f"[{c.category}] {c.name} — {c.detail}",
+                      style={"fontSize": "11px", "marginBottom": "3px"})
+             for c in failed]
+    return html.Div([
+        html.Div([
+            html.Span("⚠ ", style={"fontWeight": "800", "fontSize": "18px"}),
+            html.Span("AUDIT FAILED",
+                      style={"fontWeight": "800", "fontSize": "15px",
+                             "letterSpacing": "0.5px"}),
+        ], style={"marginBottom": "6px"}),
+        html.Div(f"{ok}/{n} passed, {len(failed)} failed:",
+                 style={"fontSize": "13px", "fontWeight": "700",
+                        "marginBottom": "6px"}),
+        html.Ul(items, style={"marginTop": "4px", "marginBottom": "4px",
+                               "paddingLeft": "20px"}),
+        html.Div("Affected KPIs are flagged as 'unverified' in the table below.",
+                 style={"fontSize": "11px", "fontStyle": "italic",
+                        "opacity": "0.9"}),
+    ], style={
+        "background": RED, "color": "white",
+        "borderRadius": "8px", "padding": "12px 16px",
+        "marginBottom": "14px",
+    })
+
+
 def _balance_card(b):
     """Single resource-balance card (green when feasible, red when not)."""
     GREEN = "#2E7D4E"
@@ -231,13 +282,28 @@ def results_table(engine, r):
                                        "borderBottom": f"2px solid {LIGHT}"})
                     for h in ("Quantity", "Value", "Unit", "Basis")])
     rows = [head]
-    conv = _convergence_status(r)
-    feas = _feasibility_status(r)
-    not_ok = ((conv is not None and not conv.converged) or
-              (feas is not None and not feas.feasible))
+    conv  = _convergence_status(r)
+    feas  = _feasibility_status(r)
+    audit = _audit_status(r)
+    # Global flip — convergence / feasibility / generic audit (P12/P13) failures
+    # invalidate every row irrespective of per-check coverage.
+    generic_audit_fail = (audit is not None and bool(audit.generic_failures()))
+    global_fail = (
+        (conv is not None and not conv.converged)
+        or (feas is not None and not feas.feasible)
+        or generic_audit_fail
+    )
     for i, o in enumerate(engine.outputs(r)):
         bg = "white" if i % 2 == 0 else LIGHT
-        display_basis = "unverified" if not_ok else o.basis
+        if global_fail:
+            display_basis = "unverified"
+        elif audit is None:
+            display_basis = o.basis
+        else:
+            cov = audit.coverage_for(o.label)
+            if   cov == "failed":  display_basis = "unverified"
+            elif cov == "passed":  display_basis = o.basis
+            else:                  display_basis = "screening"
         rows.append(html.Tr([
             html.Td(o.label, style={"padding": "7px 10px", "fontSize": "13px", "color": INK}),
             html.Td(o.text(), style={"padding": "7px 10px", "fontSize": "13px", "textAlign": "center"}),
@@ -590,7 +656,8 @@ app.layout = html.Div([
             html.Div(id="status-bar"),
             html.Div(id="banner"),
             html.Div(id="conv-status"),       # convergence card (per-Run, persistent across study clicks)
-            html.Div(id="feas-status"),       # power-balance feasibility card (separate from convergence)
+            html.Div(id="feas-status"),       # resource-balance feasibility cards (separate from convergence)
+            html.Div(id="audit-status"),      # post-solve audit summary card (39 checks)
             html.Div(id="highlights"),
             html.Div([
                 dcc.Loading(type="circle", color=TEAL,
@@ -744,6 +811,7 @@ def _material_select(mat_val):
     Output("chart", "src"), Output("last", "data"), Output("banner", "children"),
     Output("status-bar", "children"), Output("smart-section", "children"),
     Output("conv-status", "children"), Output("feas-status", "children"),
+    Output("audit-status", "children"),
     Input("run", "n_clicks"), Input("system", "value"),
     State({"type": "sysin", "key": ALL}, "value"), State({"type": "sysin", "key": ALL}, "id"))
 def _run(_n, key, values, ids):
@@ -763,8 +831,9 @@ def _run(_n, key, values, ids):
             "Edit it through Request a tool, then verify and promote.",
             style={"background": "#FDEEEC", "border": f"1px solid {RED}", "color": RED,
                    "padding": "10px 14px", "borderRadius": "8px", "marginBottom": "14px", "fontSize": "13px"})
-    conv_status = convergence_card(r)
-    feas_status = feasibility_card(r)
+    conv_status  = convergence_card(r)
+    feas_status  = feasibility_card(r)
+    audit_status = audit_card(r)
     status_bar = html.Div([
         html.Span("\u2713  ", style={"fontWeight": "700"}),
         html.Span(f"Calculation complete \u2014 {engine.name}"),
@@ -773,7 +842,8 @@ def _run(_n, key, values, ids):
               "color": TEAL, "fontWeight": "600"})
     return (highlight_cards(engine, r), results_table(engine, r), chart_src(engine, r),
             {"key": key, "vals": vals}, banner, status_bar,
-            build_smart_section(engine, vals, r), conv_status, feas_status)
+            build_smart_section(engine, vals, r),
+            conv_status, feas_status, audit_status)
 
 
 @app.callback(Output("modal", "style"),

@@ -109,11 +109,16 @@ class GPUCassette(Block):
         self._out_set("coolant_out", coolant_out)
         self._out_set("heat", Stream.energy(power=q_W, label="GPU cassette heat load"))
 
+        overhead_W = it_power_W * aux             # cassette overhead (pumps / ctrl / etc) inside the enclosure
+
         # Results
         self._result("IT power",        it_power_W / 1e3,  "kW",    "verified",
                      "GPUs × p_gpu (all IT → heat)")
+        self._result("Cassette overhead electrical",
+                     overhead_W / 1e3,    "kW",    "verified",
+                     "IT × aux_frac (pumps/controls inside the cassette)")
         self._result("Heat load",       q_W        / 1e3,  "kW",    "verified",
-                     "IT × (1 + aux_frac)  [ASHRAE TC 9.9]")
+                     "IT + cassette overhead — both dissipate into the coolant")
         self._result("Coolant mdot",    mdot,              "kg/s",  "verified")
         self._result("Coolant vol flow",vol_Lpm,           "L/min", "verified")
         self._result("Supply temp",     T_sup - 273.15,    "°C",    "input")
@@ -164,3 +169,31 @@ class GPUCassette(Block):
             "coolant_out": (1.0, 0.5),   # right centre
             "heat":        (0.5, 0.0),   # top centre
         }
+
+    # ── audit ───────────────────────────────────────────────────────────────
+
+    def audit_checks(self) -> list:
+        from ..audit import (mass_balance, energy_balance, pass_fail,
+                              bounds_check)
+        r = self.results
+        it_kW       = r["IT power"].value
+        overhead_kW = r["Cassette overhead electrical"].value
+        heat_kW     = r["Heat load"].value
+        pue         = r["PUE  (approx)"].value
+        coolant_in  = self.inlets["coolant_in"].stream
+        coolant_out = self.outlets["coolant_out"].stream
+        m_in  = coolant_in.mdot  if coolant_in  is not None and coolant_in.mdot  else 0.0
+        m_out = coolant_out.mdot if coolant_out is not None and coolant_out.mdot else 0.0
+        return [
+            energy_balance("E7: Heat_load = IT_power + Cassette_overhead",
+                supply=heat_kW, demand=it_kW + overhead_kW,
+                affects=["GPU IT load"], tol_rel=1e-3),
+            pass_fail("M7: coolant inlet supply ≥ cassette flow demand",
+                passed=m_in >= m_out * 0.999,
+                detail=f"inlet {m_in:.2f} kg/s ≥ cassette {m_out:.2f} kg/s "
+                       f"(headroom {m_in - m_out:+.2f} kg/s)",
+                category="Mass closure", affects=["GPU IT load"]),
+            bounds_check("P7: PUE ≥ 1.0",
+                value=pue, lo=1.0, hi=10.0, unit="-",
+                affects=["GPU IT load"]),
+        ]

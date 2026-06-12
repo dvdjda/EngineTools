@@ -116,3 +116,49 @@ class LiBrChiller(Block):
         return [Reference(
             "Herold, Radermacher, Klein — Absorption Chillers & Heat Pumps, 2016",
             kind="standard")]
+
+    # ── audit ───────────────────────────────────────────────────────────────
+
+    def audit_checks(self) -> list:
+        from ..audit import (mass_balance, energy_balance, pass_fail,
+                              bounds_check)
+        r = self.results
+        q_gen   = r["Generator duty"].value
+        q_cool  = r["Cooling capacity kW"].value
+        q_cond  = r["Condenser duty"].value
+        cop     = self._p("cop")
+        chw_sup = self._p("chw_sup") - 273.15
+        dt_chw  = self._p("chw_dt")
+        chw_ret = chw_sup + dt_chw
+        steam_in = self.inlets["steam_in"].stream
+        cond_out = self.outlets["condensate"].stream
+        steam_mdot = steam_in.mdot if steam_in is not None and steam_in.mdot else 0.0
+        cond_mdot  = cond_out.mdot if cond_out is not None and cond_out.mdot else 0.0
+        t_steam_C  = (steam_in.T - 273.15) if steam_in is not None and steam_in.T else 0.0
+        t_cond_C   = 100.0    # condensate at 1 atm saturation
+        return [
+            energy_balance("E5: Q_gen · COP = Q_cool",
+                supply=q_gen * cop, demand=q_cool,
+                affects=["LiBr cooling capacity"], tol_rel=1e-3),
+            energy_balance("E6: Q_cond = Q_gen + Q_cool (chiller 1st law)",
+                supply=q_cond, demand=q_gen + q_cool,
+                affects=["LiBr cooling capacity"], tol_rel=5e-3),
+            mass_balance("M3: steam_in = condensate_out (water mass)",
+                supply=steam_mdot, demand=cond_mdot,
+                affects=["LiBr cooling capacity"], tol_rel=1e-4),
+            pass_fail("T6: T_CHW_supply ≥ 5°C",
+                passed=chw_sup >= 5.0,
+                detail=f"T_chw_supply={chw_sup:.1f}°C",
+                category="Second law", affects=["LiBr cooling capacity"]),
+            pass_fail("T7: T_CHW_return > T_CHW_supply",
+                passed=chw_ret > chw_sup,
+                detail=f"T_ret={chw_ret:.1f} > T_sup={chw_sup:.1f}°C",
+                category="Second law", affects=["LiBr cooling capacity"]),
+            pass_fail("T9: T_steam_in > T_condensate (generator driving force)",
+                passed=t_steam_C > t_cond_C,
+                detail=f"T_steam={t_steam_C:.0f}°C > T_cond={t_cond_C:.0f}°C",
+                category="Second law", affects=["LiBr cooling capacity"]),
+            bounds_check("P4: LiBr COP in (0.5, 1.3)",
+                value=cop, lo=0.5, hi=1.3, unit="-",
+                affects=["LiBr cooling capacity"]),
+        ]

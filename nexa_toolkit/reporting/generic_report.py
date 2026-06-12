@@ -34,22 +34,61 @@ def _feasibility_of(result):
     return result.get("feasibility") if isinstance(result, dict) else None
 
 
+def _audit_of(result):
+    """Return result['audit'] (AuditStatus) if the engine surfaces it."""
+    return result.get("audit") if isinstance(result, dict) else None
+
+
 def _any_failed(result) -> bool:
-    """Either solver or feasibility check failed → KPIs untrustworthy."""
+    """Either solver, feasibility, or a generic audit check (no specific
+    affects list — like P12 negative-flow violations) failed → KPIs are
+    untrustworthy across the board."""
     conv = _convergence_of(result)
     feas = _feasibility_of(result)
-    return ((conv is not None and not conv.converged) or
-            (feas is not None and not feas.feasible))
+    if conv is not None and not conv.converged:
+        return True
+    if feas is not None and not feas.feasible:
+        return True
+    audit = _audit_of(result)
+    if audit is not None and audit.generic_failures():
+        return True
+    return False
 
 
 def _result_rows(engine, result):
-    """Result rows. Override basis to 'unverified' (red) when either the
-    solver loops failed OR the power balance is infeasible — both are
-    independent reasons to distrust the KPIs."""
-    not_ok = _any_failed(result)
-    return [(o.label, o.text(), o.unit,
-             "unverified" if not_ok else o.basis)
-            for o in engine.outputs(result)]
+    """Per-KPI basis is now data-driven:
+       - global override (convergence/feasibility/generic-audit fail) → unverified
+       - audit covered this KPI AND a covering check failed             → unverified
+       - audit covered this KPI AND every covering check passed         → engine-declared
+       - audit didn't cover this KPI                                    → screening
+       - no audit surfaced (v1 engines)                                 → engine-declared
+    """
+    audit       = _audit_of(result)
+    global_fail = _any_failed(result)
+    rows = []
+    for o in engine.outputs(result):
+        if global_fail:
+            basis = "unverified"
+        elif audit is None:
+            basis = o.basis
+        else:
+            cov = audit.coverage_for(o.label)
+            if   cov == "failed":  basis = "unverified"
+            elif cov == "passed":  basis = o.basis
+            else:                  basis = "screening"
+        rows.append((o.label, o.text(), o.unit, basis))
+    return rows
+
+
+def _audit_summary_line(audit) -> tuple[str, bool]:
+    """One-liner for the report Audit section."""
+    if audit is None:
+        return ("", True)
+    n = len(audit.checks); ok = sum(1 for c in audit.checks if c.passed)
+    if audit.passed:
+        return (f"Audit: {ok}/{n} checks passed.", True)
+    failed = audit.failed()
+    return (f"Audit: {ok}/{n} passed, {len(failed)} FAILED.", False)
 
 
 def _convergence_text(result):
@@ -293,6 +332,34 @@ def build_excel(engine, values, result, path, ai_text=None, study=None):
             else:
                 row = next_row
 
+    # Audit summary band — list every failed check; row count adapts.
+    audit = _audit_of(result)
+    if audit is not None:
+        arow = row + 2
+        band(f"A{arow}", "Audit", f"D{arow}")
+        line, ok = _audit_summary_line(audit)
+        ws.cell(arow + 1, 1, line).font = Font(
+            name="Arial", bold=True, size=11,
+            color=("2E7D4E" if ok else "C0392B"))
+        ws.merge_cells(f"A{arow + 1}:D{arow + 1}")
+        if not ok:
+            ws.cell(arow + 2, 1,
+                    "⚠ Failed checks listed below. Affected KPIs flagged "
+                    "as 'unverified' in Results.").font = Font(
+                name="Arial", bold=True, size=10, color="C0392B")
+            ws.merge_cells(f"A{arow + 2}:D{arow + 2}")
+            for col, h in enumerate(("Check", "Category", "Detail"), start=1):
+                c = ws.cell(arow + 3, col, h)
+                c.font = Font(name="Arial", bold=True, color=HEX_NAVY)
+                c.fill = PatternFill("solid", fgColor=HEX_LIGHT)
+            for i, ch in enumerate(audit.failed(), start=arow + 4):
+                ws.cell(i, 1, ch.name)
+                ws.cell(i, 2, ch.category)
+                ws.cell(i, 3, ch.detail)
+            row = arow + 3 + len(audit.failed())
+        else:
+            row = arow + 2
+
     start = row + 2
     band(f"A{start}", "Results", f"D{start}")
     header(start + 1, ("Quantity", "Value", "Unit", "Basis"))
@@ -467,6 +534,44 @@ def build_pdf(engine, values, result, path, chart_png, ai_text=None, study=None)
                     f"⚠ {resource_upper} DEFICIT — demand {b.demand:,.0f} "
                     f"{b.unit} &gt; supply {b.supply:,.0f} {b.unit}, "
                     f"shortfall {b.shortfall:,.0f} {b.unit}.", warn_st))
+
+    # Post-solve audit section — runs after every solve, summarises every
+    # check that vouches for the KPIs below. Per-KPI basis already reflects
+    # audit coverage via _result_rows above.
+    audit = _audit_of(result)
+    if audit is not None:
+        green = colors.HexColor("#2E7D4E"); red_c = colors.HexColor("#C0392B")
+        story.append(Spacer(1, 8))
+        story.append(Paragraph("Audit", sec))
+        line, ok = _audit_summary_line(audit)
+        summary_st = ParagraphStyle("audit_sum", fontName="Helvetica-Bold",
+                                     fontSize=10, textColor=(green if ok else red_c))
+        story.append(Paragraph(line, summary_st))
+        if not ok:
+            warn_st = ParagraphStyle("audit_warn", fontName="Helvetica-Bold",
+                                      fontSize=10.5, textColor=red_c,
+                                      backColor=colors.HexColor("#FBE9E7"),
+                                      borderPadding=6, borderRadius=4,
+                                      spaceBefore=4, spaceAfter=6)
+            story.append(Paragraph(
+                "⚠ Audit failures listed below. The affected KPIs are flagged "
+                "as &quot;unverified&quot; in the Results table.", warn_st))
+            f_rows = [["Check", "Category", "Detail"]]
+            for c in audit.failed():
+                f_rows.append([c.name, c.category, c.detail])
+            ft = Table(f_rows, colWidths=[W * 0.32, W * 0.18, W * 0.50])
+            ft.setStyle(TableStyle([
+                ("FONT", (0, 0), (-1, -1), "Helvetica", 8),
+                ("BACKGROUND", (0, 0), (-1, 0), light),
+                ("FONT", (0, 0), (-1, 0), "Helvetica-Bold", 8),
+                ("TEXTCOLOR", (0, 0), (-1, -1), ink),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LINEBELOW", (0, 0), (-1, -1), 0.3,
+                 colors.HexColor("#C9D2E0")),
+                ("TOPPADDING", (0, 0), (-1, -1), 3),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+                ("LEFTPADDING", (0, 0), (0, -1), 4)]))
+            story.append(ft)
 
     # results table with basis column
     story.append(Paragraph("Results", sec))

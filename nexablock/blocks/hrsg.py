@@ -118,3 +118,64 @@ class HRSG(Block):
     def references(self):
         return [Reference("IAPWS-IF97 via DWSIM SteamTables2 / CoolProp",
                           kind="standard")]
+
+    # ── audit ───────────────────────────────────────────────────────────────
+
+    def audit_checks(self) -> list:
+        from ..audit import (mass_balance, energy_balance, pass_fail,
+                              bounds_check)
+        r = self.results
+        q_hrsg_kW    = r["HRSG duty"].value
+        q_stack_kW   = r["Stack heat loss"].value
+        t_stack      = r["Stack temperature"].value      # °C
+        t_steam      = r["Steam temperature"].value      # °C
+        t_sat        = r["Steam saturation T"].value     # °C
+        mdot_steam   = r["Steam generation"].value / 3.6 # t/h → kg/s
+        h_steam_kJ   = r["Steam enthalpy"].value
+        h_fw_kJ      = r["Feedwater enthalpy"].value
+        eff_pct      = self._p("hrsg_eff") * 100.0
+        p_steam_Pa   = self._p("p_steam")
+        fw_t_C       = self._p("fw_t") - 273.15
+        # Inlet streams
+        exh   = self.inlets["exhaust_in"].stream
+        fw    = self.inlets["feedwater"].stream
+        exh_heat_kW = 0.0
+        t_exh_C = 0.0
+        if exh is not None and exh.T is not None and exh.mdot is not None:
+            cp_exh   = exh.props.get("cp", 1080.0)
+            t_exh_C  = exh.T - 273.15
+            exh_heat_kW = exh.mdot * cp_exh * (exh.T - 298.15) / 1000.0
+        fw_mdot = fw.mdot if fw is not None and fw.mdot is not None else 0.0
+        checks = [
+            energy_balance("E3: exhaust_in · η_hrsg = HRSG duty",
+                supply=exh_heat_kW * self._p("hrsg_eff"), demand=q_hrsg_kW,
+                affects=["Steam generation"], tol_rel=5e-3),
+            energy_balance("E4: HRSG duty = ṁ_steam · (h_steam − h_fw)",
+                supply=q_hrsg_kW,
+                demand=mdot_steam * (h_steam_kJ - h_fw_kJ),
+                affects=["Steam generation"], tol_rel=5e-3),
+            pass_fail("M1: feedwater supply ≥ steam consumed",
+                passed=fw_mdot >= mdot_steam * 0.999,
+                detail=f"FW supply {fw_mdot:.2f} kg/s ≥ steam {mdot_steam:.2f} kg/s "
+                       f"(headroom {fw_mdot - mdot_steam:+.2f} kg/s)",
+                category="Mass closure", affects=["Steam generation"]),
+            pass_fail("T1: T_exhaust_in > T_steam (hot pinch > 0)",
+                passed=t_exh_C > t_steam,
+                detail=f"T_exh={t_exh_C:.0f}°C, T_steam={t_steam:.0f}°C",
+                category="Second law", affects=["Steam temperature"]),
+            pass_fail("T2: T_stack > T_feedwater (cold pinch > 0)",
+                passed=t_stack > fw_t_C,
+                detail=f"T_stack={t_stack:.0f}°C, T_fw={fw_t_C:.0f}°C",
+                category="Second law", affects=["Steam temperature"]),
+            pass_fail("T3: T_steam ≥ T_sat (not subcooled)",
+                passed=t_steam >= t_sat - 1.0,
+                detail=f"T_steam={t_steam:.1f}°C ≥ T_sat={t_sat:.1f}°C",
+                category="Second law", affects=["Steam temperature"]),
+            bounds_check("P8: HRSG effectiveness in [50, 95] %",
+                value=eff_pct, lo=50.0, hi=95.0, unit="%",
+                affects=["Steam generation"]),
+            bounds_check("P9: P_steam in (0, 22e6) Pa (subcritical)",
+                value=p_steam_Pa, lo=1.0, hi=22e6, unit="Pa",
+                affects=["Steam generation"]),
+        ]
+        return checks

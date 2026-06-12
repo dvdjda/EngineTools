@@ -261,7 +261,7 @@ def test_xlsx_high_gpu_load_shows_both_deficits(engine, hooks, tmp_path):
     assert "Power balance"             in joined
     assert "Cooling capacity balance"  in joined
     assert "Assumption"                in joined
-    assert "GT-powered"                in joined
+    assert "derated"                   in joined.lower()
     assert "immersion"                 in joined.lower()
     assert "unverified"                in joined
     for line in ("LiBr pump electrical",
@@ -269,7 +269,9 @@ def test_xlsx_high_gpu_load_shows_both_deficits(engine, hooks, tmp_path):
                  "GT auxiliaries",
                  "Plant BoP",
                  "LiBr cooling capacity",
-                 "GPU heat load"):
+                 "GPU silicon heat",
+                 "Cassette overhead",
+                 "GT derated capacity"):
         assert line in joined, f"line {line!r} missing"
     assert "no recycle loops" in joined
 

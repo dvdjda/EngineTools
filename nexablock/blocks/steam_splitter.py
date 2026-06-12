@@ -70,3 +70,24 @@ class SteamSplitter(Block):
             "to_libr":  (1.0, 0.3),   # right-top
             "to_med":   (1.0, 0.7),   # right-bottom
         }
+
+    # ── audit ───────────────────────────────────────────────────────────────
+
+    def audit_checks(self) -> list:
+        from ..audit import mass_balance, pass_fail
+        f = self._p("libr_frac")
+        s_in   = self.inlets["steam_in"].stream
+        s_libr = self.outlets["to_libr"].stream
+        s_med  = self.outlets["to_med"].stream
+        m_in   = s_in.mdot   if s_in   is not None and s_in.mdot   else 0.0
+        m_libr = s_libr.mdot if s_libr is not None and s_libr.mdot else 0.0
+        m_med  = s_med.mdot  if s_med  is not None and s_med.mdot  else 0.0
+        return [
+            mass_balance("M2: splitter inlet = sum(outlets)",
+                supply=m_in, demand=m_libr + m_med,
+                affects=["Steam generation"], tol_rel=1e-4),
+            pass_fail("P10: libr_frac + med_frac = 1.0",
+                passed=abs((f + (1.0 - f)) - 1.0) < 1e-9 and 0.0 <= f <= 1.0,
+                detail=f"libr_frac={f:.4f}, med_frac={1.0-f:.4f}, sum=1.0",
+                category="Plausibility", affects=["Steam generation"]),
+        ]

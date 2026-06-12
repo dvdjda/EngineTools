@@ -69,12 +69,20 @@ def test_higher_libr_split_makes_cooling_feasible(engine):
 
 # ── cooling-balance contents are auditable ──────────────────────────────────
 
-def test_cooling_breakdown_lists_libr_supply_and_gpu_demand(engine):
+def test_cooling_breakdown_lists_silicon_overhead_and_libr(engine):
+    """Cassette overhead is split out so the report shows that the cooling
+    side must absorb BOTH silicon heat AND in-cassette overhead (pumps,
+    controls etc)."""
     c = engine.solve(engine.defaults())["feasibility"].by("Cooling capacity")
-    assert set(c.breakdown.keys()) == {"LiBr cooling capacity", "GPU heat load"}
+    assert set(c.breakdown.keys()) == {
+        "LiBr cooling capacity", "GPU silicon heat", "Cassette overhead heat"}
     assert c.unit == "kW"
-    assert c.breakdown["GPU heat load"] > 0
+    assert c.breakdown["GPU silicon heat"] > 0
+    assert c.breakdown["Cassette overhead heat"] > 0
     assert c.breakdown["LiBr cooling capacity"] > 0
+    # Total demand equals silicon + overhead.
+    assert abs(c.demand - (c.breakdown["GPU silicon heat"]
+                           + c.breakdown["Cassette overhead heat"])) < 1e-6
 
 
 def test_cooling_assumption_text_present(engine):
@@ -85,13 +93,28 @@ def test_cooling_assumption_text_present(engine):
 
 # ── power balance: structure still itemised at screening fidelity ───────────
 
-def test_power_breakdown_itemises_every_aux_load(engine):
+def test_power_breakdown_itemises_supply_info_and_every_demand(engine):
+    """Breakdown shows derated supply ceiling, current operating point + headroom
+    (info-only rows), and every demand component including the cassette overhead
+    split-out from silicon."""
     p = engine.solve(engine.defaults())["feasibility"].by("Power")
-    for k in ("GT actual power", "GPU IT × PUE", "MED electrical (pumps)",
-              "LiBr pump electrical", "Cooling tower fan electrical",
-              "GT auxiliaries", "Plant BoP (lights/HVAC)"):
+    for k in (
+        "GT derated capacity (available)",
+        "GT current output (info)",
+        "Operating headroom (info)",
+        "GPU silicon (IT power)",
+        "Cassette overhead (pumps/ctl)",
+        "MED electrical (pumps)",
+        "LiBr pump electrical",
+        "Cooling tower fan electrical",
+        "GT auxiliaries",
+        "Plant BoP (lights/HVAC)",
+    ):
         assert k in p.breakdown, f"missing {k!r}"
         assert p.breakdown[k] is not None, f"{k} must be modelled"
+    # Supply is derated, NOT actual.
+    assert p.supply == p.breakdown["GT derated capacity (available)"]
+    assert p.supply > p.breakdown["GT current output (info)"]
 
 
 def test_each_block_emits_its_own_aux_row(engine):
@@ -116,15 +139,16 @@ def test_bop_frac_zeroes_facility_load(engine):
 # ── high-GPU case fails BOTH balances ───────────────────────────────────────
 
 def test_high_gpu_load_fails_both_power_and_cooling(engine):
-    """gpu_it_kW=10000 → both balances fail. Each one is its own truth:
-    fixing power alone wouldn't help cooling, and vice versa."""
+    """gpu_it_kW=10000 → both balances fail. With derated as supply, the
+    power shortfall is smaller (~1630 kW vs ~3000 kW at operating point)
+    because the GT has headroom to ramp before going infeasible."""
     v = engine.defaults(); v["gpu_it_kW"] = 10000.0
     f = engine.solve(v)["feasibility"]
     p = f.by("Power")
     c = f.by("Cooling capacity")
     assert not p.feasible
     assert not c.feasible
-    assert 2900 < p.shortfall < 3200      # power shortfall ~3000 kW
+    assert 1500 < p.shortfall < 1800      # power shortfall ~1630 kW vs derated
     assert 6500 < c.shortfall < 7200      # cooling shortfall ~6900 kW
     assert not f.feasible
 

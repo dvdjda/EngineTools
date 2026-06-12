@@ -22,14 +22,16 @@ from nexablock.blocks import (GasTurbine, GPUCassette, MED, LiBrChiller,
 
 
 POWER_ASSUMPTION = (
-    "GT-powered: the GPU + plant electrical load is drawn from the GT "
-    "electrical bus. No external grid import; GT must supply all demand."
+    "Supply is the GT derated capacity at site ambient (the available "
+    "envelope). Operating point and operating headroom shown for context. "
+    "Demand is itemised at the current operating point; aux loads scale "
+    "with current output, not with the derated ceiling."
 )
 
 COOLING_ASSUMPTION = (
-    "Single-phase immersion: all GPU electrical input dissipates as heat "
-    "into the coolant. LiBr Q_cool is the only modelled cooling source — "
-    "no economiser, no dry cooler, no free-cooling bypass."
+    "Single-phase immersion: all GPU silicon power plus cassette overhead "
+    "dissipate as heat into the coolant. LiBr Q_cool is the only modelled "
+    "cooling source — no economiser, no dry cooler, no free-cooling bypass."
 )
 
 
@@ -98,57 +100,65 @@ def _make(resource, unit, supply, demand, assumption, breakdown):
 
 def power_balance(solved, assumption: str = POWER_ASSUMPTION,
                   bop_frac: float = 0.010) -> ResourceBalance:
-    """Electrical supply/demand. Supply: GT actual power. Demand: GPU IT × PUE
-    plus itemised aux (MED, LiBr pumps, CT fans, GT aux, Plant BoP)."""
+    """Electrical supply/demand.
+
+    Supply: GT *derated* capacity (the ambient-corrected ceiling — what the
+            GT can deliver at full load), not the current operating point.
+    Demand: GPU silicon + cassette overhead + itemised plant aux
+            (MED pumps, LiBr pumps, CT fans, GT aux, plant BoP).
+    """
     gt   = _first(solved, GasTurbine)
     gpu  = _first(solved, GPUCassette)
     med  = _first(solved, MED)
     libr = _first(solved, LiBrChiller)
     ct   = _first(solved, CoolingTower)
 
-    gen_kW = _read(gt, "GT actual power")
+    derated_kW = _read(gt, "GT derated capacity")            # supply ceiling
+    actual_kW  = _read(gt, "GT actual power")                # operating point (info)
+    headroom_kW = derated_kW - actual_kW
 
-    it_kW         = _read(gpu, "IT power")
-    pue           = _read(gpu, "PUE  (approx)") if gpu is not None else 1.0
-    gpu_demand_kW = it_kW * (pue if pue > 0 else 1.0)
+    silicon_kW   = _read(gpu, "IT power")
+    overhead_kW  = _read(gpu, "Cassette overhead electrical")
 
     med_aux_kW  = _read(med,  "MED electrical")
     libr_aux_kW = _read(libr, "LiBr pump electrical")
     ct_aux_kW   = _read(ct,   "CT fan electrical")
     gt_aux_kW   = _read(gt,   "GT aux electrical")
-    bop_aux_kW  = max(0.0, bop_frac) * gen_kW
+    bop_aux_kW  = max(0.0, bop_frac) * actual_kW             # scales with current operating point
 
-    demand_kW = (gpu_demand_kW + med_aux_kW + libr_aux_kW
+    demand_kW = (silicon_kW + overhead_kW + med_aux_kW + libr_aux_kW
                  + ct_aux_kW + gt_aux_kW + bop_aux_kW)
 
     breakdown = {
-        "GT actual power":                gen_kW,
-        "GPU IT × PUE":                   gpu_demand_kW,
-        "MED electrical (pumps)":         med_aux_kW,
-        "LiBr pump electrical":           libr_aux_kW,
-        "Cooling tower fan electrical":   ct_aux_kW,
-        "GT auxiliaries":                 gt_aux_kW,
-        "Plant BoP (lights/HVAC)":        bop_aux_kW,
+        "GT derated capacity (available)": derated_kW,
+        "GT current output (info)":        actual_kW,
+        "Operating headroom (info)":       headroom_kW,
+        "GPU silicon (IT power)":          silicon_kW,
+        "Cassette overhead (pumps/ctl)":   overhead_kW,
+        "MED electrical (pumps)":          med_aux_kW,
+        "LiBr pump electrical":            libr_aux_kW,
+        "Cooling tower fan electrical":    ct_aux_kW,
+        "GT auxiliaries":                  gt_aux_kW,
+        "Plant BoP (lights/HVAC)":         bop_aux_kW,
     }
-    return _make("Power", "kW", gen_kW, demand_kW, assumption, breakdown)
+    return _make("Power", "kW", derated_kW, demand_kW, assumption, breakdown)
 
 
 def cooling_balance(solved, assumption: str = COOLING_ASSUMPTION) -> ResourceBalance:
-    """Cooling supply/demand. Supply: LiBr Q_cool. Demand: GPU heat dump.
-
-    Heat dump = IT × (1 + aux_frac) = the "Heat load" the GPU block already
-    computes. Equals the GPU's electrical demand for immersion cooling
-    (all electrical → heat), but the two checks are independent: GT could
-    supply the kW and still not have enough Q_cool, or vice versa."""
+    """Cooling supply/demand. Supply: LiBr Q_cool. Demand: GPU silicon heat
+    + cassette overhead heat. Both dissipate into the immersion coolant."""
     libr = _first(solved, LiBrChiller)
     gpu  = _first(solved, GPUCassette)
 
-    supply_kW = _read(libr, "Cooling capacity kW")
-    demand_kW = _read(gpu,  "Heat load")
+    supply_kW   = _read(libr, "Cooling capacity kW")
+    silicon_kW  = _read(gpu,  "IT power")
+    overhead_kW = _read(gpu,  "Cassette overhead electrical")
+    demand_kW   = silicon_kW + overhead_kW
 
     breakdown = {
         "LiBr cooling capacity":  supply_kW,
-        "GPU heat load":          demand_kW,
+        "GPU silicon heat":       silicon_kW,
+        "Cassette overhead heat": overhead_kW,
     }
     return _make("Cooling capacity", "kW", supply_kW, demand_kW,
                  assumption, breakdown)
