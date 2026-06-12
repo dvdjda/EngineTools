@@ -357,6 +357,19 @@ def test_tornado_top_n_truncates(sens):
         _plt.close(fig)
 
 
+def test_tornado_drop_zero_filters_zero_elasticity_bars(sens):
+    """drop_zero=True hides inputs that don't move the chosen KPI so the
+    chart doesn't read as broken when most bars are zero-length."""
+    full   = _tornado_figure(sens, kpi="MED water m3day")
+    pruned = _tornado_figure(sens, kpi="MED water m3day", drop_zero=True)
+    try:
+        # libr_cop has ε=0 for MED water → pruned bar count drops by 1.
+        assert len(pruned.axes[0].patches) < len(full.axes[0].patches)
+        assert len(pruned.axes[0].patches) >= 1
+    finally:
+        _plt.close(full); _plt.close(pruned)
+
+
 # ── sweep ────────────────────────────────────────────────────────────────────
 
 def test_sweep_chart_writes_png(load_sweep, tmp_path):
@@ -372,6 +385,19 @@ def test_sweep_figure_one_line_per_kpi(load_sweep):
     try:
         ax = fig.axes[0]
         assert len(ax.lines) == len(kpis)
+    finally:
+        _plt.close(fig)
+
+
+def test_sweep_figure_subplots_gives_one_axes_per_kpi(load_sweep):
+    """subplots=True draws each KPI on its own axes so a 'flat-at-zero'
+    small-scale line (steam t/h next to GT kW) becomes visible again."""
+    kpis = ["Steam generation t/h", "MED water m3day", "GT actual power kW"]
+    fig = _sweep_figure(load_sweep, kpis=kpis, subplots=True)
+    try:
+        assert len(fig.axes) == len(kpis)
+        for ax in fig.axes:
+            assert len(ax.lines) == 1
     finally:
         _plt.close(fig)
 

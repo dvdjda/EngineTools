@@ -45,8 +45,12 @@ class GTSystemV2LoadSweep(GTSystemV2):
         return {**base, "sweep": sweep}
 
     def chart(self, r: dict, path: str) -> str:
+        # subplots=True so each KPI gets its own y-axis — without it the
+        # smaller-scale KPIs (steam t/h, MED water m³/day) get visually
+        # crushed against the GT-power line.
         return sweep_chart(
             r["sweep"], path,
-            kpis  = _SWEEP_KPIS,
-            title = "GT-load sweep (50–100%)",
+            kpis     = _SWEEP_KPIS,
+            title    = "GT-load sweep (50–100%)",
+            subplots = True,
         )

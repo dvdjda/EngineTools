@@ -39,22 +39,36 @@ _LINE_COLORS = [NAVY, TEAL, RED, GREY]
 # ── public helpers ─────────────────────────────────────────────────────────
 
 def tornado_chart(result, path: str, *,
-                  kpi:   str,
-                  top_n: int | None = None,
-                  title: str | None = None) -> str:
-    """Horizontal tornado bar chart of elasticity for one KPI. Returns path."""
-    fig = _tornado_figure(result, kpi=kpi, top_n=top_n, title=title)
+                  kpi:       str,
+                  top_n:     int | None = None,
+                  title:     str | None = None,
+                  drop_zero: bool       = False) -> str:
+    """Horizontal tornado bar chart of elasticity for one KPI. Returns path.
+
+    drop_zero=True hides inputs whose elasticity is effectively zero — useful
+    when the picked KPI is structurally decoupled from most inputs and the
+    zero-length bars make the chart read as broken."""
+    fig = _tornado_figure(result, kpi=kpi, top_n=top_n, title=title,
+                           drop_zero=drop_zero)
     fig.savefig(path, dpi=150, facecolor="white", bbox_inches="tight")
     plt.close(fig)
     return path
 
 
 def sweep_chart(result, path: str, *,
-                kpis:  list | None = None,
-                x:     str | None  = None,
-                title: str | None  = None) -> str:
-    """Line chart of KPIs vs the swept input. 1-D only. Returns path."""
-    fig = _sweep_figure(result, kpis=kpis, x=x, title=title)
+                kpis:     list | None = None,
+                x:        str | None  = None,
+                title:    str | None  = None,
+                subplots: bool        = False) -> str:
+    """Line chart of KPIs vs the swept input. 1-D only.
+
+    subplots=False (default): all KPIs on one axes. Best when they share a
+                              scale; otherwise the smaller-scale KPIs read
+                              as pinned to zero against the larger ones.
+    subplots=True:            one stacked subplot per KPI, each on its own
+                              y-axis. Use this when KPIs span very different
+                              magnitudes (kW vs t/h vs m³/day)."""
+    fig = _sweep_figure(result, kpis=kpis, x=x, title=title, subplots=subplots)
     fig.savefig(path, dpi=150, facecolor="white", bbox_inches="tight")
     plt.close(fig)
     return path
@@ -83,8 +97,11 @@ def sweep_contour(result, path: str, *,
 
 # ── figure builders (tests inspect these before they're closed) ───────────
 
-def _tornado_figure(result, *, kpi, top_n=None, title=None) -> Figure:
+def _tornado_figure(result, *, kpi, top_n=None, title=None,
+                     drop_zero: bool = False) -> Figure:
     entries = result.tornado(kpi)
+    if drop_zero:
+        entries = [e for e in entries if abs(e.elasticity) > 1e-6]
     if top_n is not None:
         entries = entries[:top_n]
     if not entries:
@@ -113,7 +130,8 @@ def _tornado_figure(result, *, kpi, top_n=None, title=None) -> Figure:
     return fig
 
 
-def _sweep_figure(result, *, kpis=None, x=None, title=None) -> Figure:
+def _sweep_figure(result, *, kpis=None, x=None, title=None,
+                   subplots: bool = False) -> Figure:
     if len(result.varied) > 1:
         raise ValueError(
             f"sweep_chart is 1-D only (got {len(result.varied)} varied inputs: "
@@ -122,6 +140,25 @@ def _sweep_figure(result, *, kpis=None, x=None, title=None) -> Figure:
     xs = [p.inputs[x_name] for p in result.points]
     if kpis is None:
         kpis = list(result.points[0].kpis.keys()) if result.points else []
+
+    if subplots and len(kpis) > 1:
+        # One row per KPI — independent y-axes so small-scale KPIs aren't
+        # crushed by the largest-scale one.
+        fig, axes = plt.subplots(len(kpis), 1, sharex=True,
+                                  figsize=(9.0, 1.6 * len(kpis) + 1.0))
+        if len(kpis) == 1:
+            axes = [axes]
+        for i, (ax, k) in enumerate(zip(axes, kpis)):
+            ys = [p.kpis.get(k, math.nan) for p in result.points]
+            ax.plot(xs, ys, marker="o", linewidth=1.6,
+                    color=_LINE_COLORS[i % len(_LINE_COLORS)])
+            ax.set_ylabel(k, color=INK, fontsize=9)
+            ax.yaxis.grid(True, color=GRID); ax.set_axisbelow(True)
+            ax.spines[["top", "right"]].set_visible(False)
+        axes[-1].set_xlabel(x_name, color=INK)
+        fig.suptitle(title or f"Sweep over {x_name}", color=INK, fontsize=12)
+        fig.tight_layout()
+        return fig
 
     fig, ax = plt.subplots(figsize=(9.0, 4.0))
     for i, k in enumerate(kpis):

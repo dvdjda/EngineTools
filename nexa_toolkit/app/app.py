@@ -1017,8 +1017,15 @@ def _run_study(kind: str, data, sweep_input):
                 bounds        = hooks.get("bounds", {}),
                 step_override = hooks.get("step_override", {}),
             ).run(inputs=hooks["sensitivity_inputs"], kpis=hooks["kpis"])
-            kpi = hooks["kpis"][0]
-            chart_kwargs = {"kpi": kpi}
+            # Pick the KPI with the most non-zero sensitivities so the tornado
+            # actually shows something — falling back to the first KPI if no
+            # one wins. GT actual power, e.g., is only moved by load_pct and
+            # ambient — 5/7 bars would be zero-length on the chart.
+            def _nonzero_count(kpi_label):
+                return sum(1 for e in sens.for_kpi(kpi_label)
+                           if abs(e.elasticity) > 1e-6)
+            kpi = max(hooks["kpis"], key=_nonzero_count) if hooks["kpis"] else None
+            chart_kwargs = {"kpi": kpi, "drop_zero": True}
             tornado_chart(sens, p, **chart_kwargs)
             label = f"Sensitivity tornado — {kpi}"
             study_result = sens
@@ -1037,7 +1044,8 @@ def _run_study(kind: str, data, sweep_input):
             values = [lo + (hi - lo) * i / (N - 1) for i in range(N)]
             swp = ParameterSweep(hooks["builder"], params, hooks["kpi_fn"]).run(
                 {sweep_input: values})
-            chart_kwargs = {"kpis": hooks["kpis"], "title": f"Sweep over {sweep_input}"}
+            chart_kwargs = {"kpis": hooks["kpis"], "title": f"Sweep over {sweep_input}",
+                            "subplots": True}
             sweep_chart(swp, p, **chart_kwargs)
             label = f"Sweep over {sweep_input}: {lo:g} → {hi:g}, {N} points"
             study_result = swp
