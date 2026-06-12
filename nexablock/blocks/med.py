@@ -76,9 +76,21 @@ class MED(Block):
         recovery = self._p("recovery")
 
         if s is None or s.mdot is None or s.mdot == 0:
+            # MED gets zero steam (e.g. libr_frac=1.0 in auto mode). Set
+            # zero-valued result rows so downstream consumers (audit, summary,
+            # report) see consistent shape rather than KeyError surprises.
             self._out_set("condensate", Stream.water_steam(0.0, 338.15, _P_ATM))
             self._out_set("fresh",      Stream.fluid(0.0, 313.15, _P_ATM))
             self._out_set("brine",      Stream.fluid(0.0, 333.15, _P_ATM))
+            n = int(round(self._p("n_effects")))
+            self._result("GOR",                     0.8 * n,  "-",      "screening")
+            self._result("MED thermal input",       0.0,      "kW",     "verified")
+            self._result("Water production m3/day", 0.0,      "m³/day", "verified")
+            self._result("Water production m3/h",   0.0,      "m³/h",   "verified")
+            self._result("Seawater feed",           0.0,      "m³/h",   "verified")
+            self._result("Brine reject",            0.0,      "m³/h",   "verified")
+            self._result("MED electrical",          0.0,      "kW",     "screening")
+            self._result("Number of effects",       float(n), "-",      "input")
             return
 
         gor        = 0.8 * n

@@ -28,7 +28,8 @@ from nexa_toolkit.reporting.generic_report import (
 from nexa_toolkit.reporting.study_export import study_to_csv, study_to_xlsx
 from nexablock.studies import (
     ParameterSweep, OneAtATimeSensitivity, ScenarioRunner,
-    tornado_chart, sweep_chart, scenarios_chart)
+    tornado_chart, sweep_chart, scenarios_chart,
+    sweep_contour, tornado_multi_chart)
 import dataclasses as _dc
 import datetime as _dt
 import pathlib as _pl
@@ -73,13 +74,21 @@ _INPUT_STYLE = {"width": "100%", "padding": "8px 10px", "border": f"1px solid {L
 def input_fields(engine):
     out = []
     for s in engine.inputs:
-        lbl = html.Label(f"{s.label}  ({s.unit})",
+        # Skip the "(unit)" suffix for dimensionless inputs so labels
+        # like "Operating mode" don't read as "Operating mode  (-)".
+        label_txt = s.label if s.unit in ("", "-") else f"{s.label}  ({s.unit})"
+        lbl = html.Label(label_txt,
                          style={"fontSize": "13px", "color": GREY,
                                 "display": "block", "marginBottom": "4px"})
         if s.choices:
-            opts = [{"label": f"{name}  —  {val} mm", "value": val}
+            # Legacy "mm" suffix was for material-thickness choices; the
+            # modern path just labels options by their name. Custom-value
+            # entry is also legacy — only offer it when the unit hints
+            # at a continuous quantity (i.e. not "-" or empty).
+            opts = [{"label": str(name), "value": val}
                     for name, val in s.choices.items()]
-            opts.append({"label": "Custom…", "value": "__custom__"})
+            if s.unit not in ("", "-"):
+                opts.append({"label": "Custom…", "value": "__custom__"})
             # find if default matches a choice; if not, show custom input
             default_in_choices = any(abs(float(o["value"]) - s.default) < 1e-9
                                      for o in opts if o["value"] != "__custom__")
@@ -667,32 +676,75 @@ app.layout = html.Div([
                 html.Div("Studies",
                          style={"fontWeight": "700", "color": NAVY, "fontSize": "14px",
                                 "marginBottom": "10px"}),
+                # Sensitivity row — multi-select inputs, multi-select KPIs
                 html.Div([
-                    html.Button("\U0001F300 Sensitivity", id="b-study-sens", n_clicks=0,
+                    html.Div("Sensitivity",
+                             style={"fontSize": "12px", "fontWeight": "700",
+                                    "color": NAVY, "marginBottom": "4px"}),
+                    html.Div([
+                        html.Div(dcc.Dropdown(id="study-sens-inputs", multi=True,
+                                              placeholder="inputs to perturb",
+                                              style={"fontSize": "11px"}),
+                                 style={"flex": "2", "marginRight": "6px"}),
+                        html.Div(dcc.Dropdown(id="study-sens-kpis", multi=True,
+                                              placeholder="KPIs to analyse",
+                                              style={"fontSize": "11px"}),
+                                 style={"flex": "2", "marginRight": "6px"}),
+                        html.Button("\U0001F300 Run", id="b-study-sens", n_clicks=0,
+                                    style={"padding": "8px 12px", "borderRadius": "7px",
+                                           "fontSize": "12px", "fontWeight": "600",
+                                           "cursor": "pointer",
+                                           "background": "white", "color": NAVY,
+                                           "border": f"1px solid {NAVY}"}),
+                    ], style={"display": "flex", "alignItems": "center"}),
+                ], style={"marginBottom": "10px"}),
+
+                # Sweep row — 1D/2D toggle with conditional selectors
+                html.Div([
+                    html.Div([
+                        html.Div("Sweep",
+                                 style={"fontSize": "12px", "fontWeight": "700",
+                                        "color": NAVY, "marginRight": "10px"}),
+                        dcc.RadioItems(id="study-sweep-mode",
+                                       options=[{"label": " 1D", "value": "1d"},
+                                                 {"label": " 2D", "value": "2d"}],
+                                       value="1d", inline=True,
+                                       style={"fontSize": "11px", "color": INK}),
+                    ], style={"display": "flex", "alignItems": "center",
+                              "marginBottom": "4px"}),
+                    html.Div([
+                        html.Div(dcc.Dropdown(id="study-sweep-x", clearable=False,
+                                              placeholder="X axis (input)",
+                                              style={"fontSize": "11px"}),
+                                 style={"flex": "1", "marginRight": "6px"}),
+                        html.Div(dcc.Dropdown(id="study-sweep-y", clearable=False,
+                                              placeholder="Y axis (input)",
+                                              style={"fontSize": "11px"}),
+                                 style={"flex": "1", "marginRight": "6px",
+                                        "display": "none"},
+                                 id="study-sweep-y-wrap"),
+                        html.Div(dcc.Dropdown(id="study-sweep-kpis", multi=True,
+                                              placeholder="KPI(s) to plot",
+                                              style={"fontSize": "11px"}),
+                                 style={"flex": "2", "marginRight": "6px"}),
+                        html.Button("\U0001F4C8 Run", id="b-study-sweep", n_clicks=0,
+                                    style={"padding": "8px 12px", "borderRadius": "7px",
+                                           "fontSize": "12px", "fontWeight": "600",
+                                           "cursor": "pointer",
+                                           "background": "white", "color": NAVY,
+                                           "border": f"1px solid {NAVY}"}),
+                    ], style={"display": "flex", "alignItems": "center"}),
+                ], style={"marginBottom": "10px"}),
+
+                # Scenarios — single button
+                html.Div([
+                    html.Button("\U0001F326 Run scenarios", id="b-study-scen", n_clicks=0,
                                 style={"padding": "8px 14px", "borderRadius": "7px",
-                                       "fontSize": "13px", "fontWeight": "600",
-                                       "marginRight": "10px", "cursor": "pointer",
+                                       "fontSize": "12px", "fontWeight": "600",
+                                       "cursor": "pointer",
                                        "background": "white", "color": NAVY,
                                        "border": f"1px solid {NAVY}"}),
-                    html.Button("\U0001F4C8 Sweep", id="b-study-sweep", n_clicks=0,
-                                style={"padding": "8px 14px", "borderRadius": "7px",
-                                       "fontSize": "13px", "fontWeight": "600",
-                                       "marginRight": "6px", "cursor": "pointer",
-                                       "background": "white", "color": NAVY,
-                                       "border": f"1px solid {NAVY}"}),
-                    html.Div(dcc.Dropdown(id="study-sweep-input", clearable=False,
-                                          placeholder="param to sweep",
-                                          style={"fontSize": "12px"}),
-                             style={"width": "200px", "marginRight": "10px",
-                                    "display": "inline-block"}),
-                    html.Button("\U0001F326 Scenarios", id="b-study-scen", n_clicks=0,
-                                style={"padding": "8px 14px", "borderRadius": "7px",
-                                       "fontSize": "13px", "fontWeight": "600",
-                                       "marginRight": "10px", "cursor": "pointer",
-                                       "background": "white", "color": NAVY,
-                                       "border": f"1px solid {NAVY}"}),
-                ], style={"display": "flex", "alignItems": "center", "flexWrap": "wrap",
-                          "gap": "6px"}),
+                ], style={"marginBottom": "4px"}),
                 html.Div([
                     html.Div(id="study-status",
                              style={"fontSize": "12px", "color": GREY,
@@ -973,17 +1025,50 @@ def _engine_hooks(key: str):
     return engine, hooks
 
 
-@app.callback(Output("study-sweep-input", "options"),
-              Output("study-sweep-input", "value"),
+@app.callback(Output("study-sens-inputs", "options"),
+              Output("study-sens-inputs", "value"),
+              Output("study-sens-kpis", "options"),
+              Output("study-sens-kpis", "value"),
+              Output("study-sweep-x", "options"),
+              Output("study-sweep-x", "value"),
+              Output("study-sweep-y", "options"),
+              Output("study-sweep-y", "value"),
+              Output("study-sweep-kpis", "options"),
+              Output("study-sweep-kpis", "value"),
               Input("system", "value"))
-def _populate_sweep_picker(engine_key):
+def _populate_study_pickers(engine_key):
+    """When the engine changes, repopulate every Studies dropdown from the
+    engine's study_hooks. Defaults: all sensitivity_inputs + all KPIs
+    selected; sweep X = first sweep_inputs entry; KPIs = all."""
+    empty = ([], None)
+    none10 = (*empty,)*5
     if not engine_key:
-        return [], None
+        return [], [], [], [], [], None, [], None, [], []
     _, hooks = _engine_hooks(engine_key)
     if not hooks:
-        return [], None
-    opts = [{"label": k, "value": k} for k in hooks.get("sweep_inputs", [])]
-    return opts, (opts[0]["value"] if opts else None)
+        return [], [], [], [], [], None, [], None, [], []
+    sens_inputs = hooks.get("sensitivity_inputs", [])
+    sweep_inputs = hooks.get("sweep_inputs", [])
+    kpis  = hooks.get("kpis", [])
+    sens_input_opts  = [{"label": k, "value": k} for k in sens_inputs]
+    kpi_opts         = [{"label": k, "value": k} for k in kpis]
+    sweep_input_opts = [{"label": k, "value": k} for k in sweep_inputs]
+    x_val = sweep_inputs[0] if sweep_inputs else None
+    y_val = sweep_inputs[1] if len(sweep_inputs) >= 2 else (sweep_inputs[0] if sweep_inputs else None)
+    return (sens_input_opts,  sens_inputs,
+            kpi_opts,         kpis,
+            sweep_input_opts, x_val,
+            sweep_input_opts, y_val,
+            kpi_opts,         kpis)
+
+
+@app.callback(Output("study-sweep-y-wrap", "style"),
+              Input("study-sweep-mode", "value"))
+def _toggle_y_picker(mode):
+    """Show Y selector only in 2D mode."""
+    base = {"flex": "1", "marginRight": "6px"}
+    return ({**base, "display": "block"} if mode == "2d"
+            else {**base, "display": "none"})
 
 
 def _msg(text, color=None):
@@ -996,8 +1081,13 @@ def _png_data_uri(path: str) -> str:
         return "data:image/png;base64," + base64.b64encode(f.read()).decode()
 
 
-def _run_study(kind: str, data, sweep_input):
-    """Build the appropriate study chart and return (chart_src, banner)."""
+def _run_study(kind: str, data, *, sens_inputs=None, sens_kpis=None,
+               sweep_mode="1d", sweep_x=None, sweep_y=None, sweep_kpis=None):
+    """Build the appropriate study chart and return (chart_src, banner).
+
+    Multi-select inputs / KPIs honoured for sensitivity. Sweep dispatches
+    on sweep_mode: 1D uses sweep_x + sweep_kpis; 2D uses sweep_x + sweep_y
+    + first sweep_kpis entry (5×5 grid → contour)."""
     if not data:
         return no_update, _msg("Run the engine first, then use Studies.")
     engine, hooks = _engine_hooks(data["key"])
@@ -1010,44 +1100,64 @@ def _run_study(kind: str, data, sweep_input):
 
     try:
         if kind == "sensitivity":
+            inputs_to_use = sens_inputs or hooks["sensitivity_inputs"]
+            kpis_to_use   = sens_kpis or hooks["kpis"]
+            if not inputs_to_use or not kpis_to_use:
+                return no_update, _msg(
+                    "Pick at least one input and one KPI for sensitivity.", RED)
             sens = OneAtATimeSensitivity(
                 builder       = hooks["builder"],
                 base_params   = params,
                 kpi_fn        = hooks["kpi_fn"],
                 bounds        = hooks.get("bounds", {}),
                 step_override = hooks.get("step_override", {}),
-            ).run(inputs=hooks["sensitivity_inputs"], kpis=hooks["kpis"])
-            # Pick the KPI with the most non-zero sensitivities so the tornado
-            # actually shows something — falling back to the first KPI if no
-            # one wins. GT actual power, e.g., is only moved by load_pct and
-            # ambient — 5/7 bars would be zero-length on the chart.
-            def _nonzero_count(kpi_label):
-                return sum(1 for e in sens.for_kpi(kpi_label)
-                           if abs(e.elasticity) > 1e-6)
-            kpi = max(hooks["kpis"], key=_nonzero_count) if hooks["kpis"] else None
-            chart_kwargs = {"kpi": kpi, "drop_zero": True}
-            tornado_chart(sens, p, **chart_kwargs)
-            label = f"Sensitivity tornado — {kpi}"
+            ).run(inputs=inputs_to_use, kpis=kpis_to_use)
+            chart_kwargs = {"kpis": list(kpis_to_use), "drop_zero": True,
+                            "title": f"Sensitivity tornado ({len(kpis_to_use)} KPIs)"}
+            tornado_multi_chart(sens, p, **chart_kwargs)
+            label = f"Sensitivity: {len(inputs_to_use)} inputs × {len(kpis_to_use)} KPIs"
             study_result = sens
             banner = _msg(label, NAVY)
 
         elif kind == "sweep":
-            if not sweep_input:
-                return no_update, _msg("Pick an input to sweep first.", RED)
+            sweep_kpis = sweep_kpis or hooks["kpis"]
+            if not sweep_x:
+                return no_update, _msg("Pick an X input first.", RED)
+            if not sweep_kpis:
+                return no_update, _msg("Pick at least one KPI for sweep.", RED)
             bounds = hooks.get("bounds", {})
-            if sweep_input in bounds:
-                lo, hi = bounds[sweep_input]
+            def _range(name, n):
+                if name in bounds:
+                    lo, hi = bounds[name]
+                else:
+                    base_v = float(vals[name])
+                    lo, hi = base_v * 0.8, base_v * 1.2
+                return [lo + (hi - lo) * i / (n - 1) for i in range(n)]
+            if sweep_mode == "2d":
+                if not sweep_y:
+                    return no_update, _msg("2D sweep needs a Y input.", RED)
+                if sweep_y == sweep_x:
+                    return no_update, _msg(
+                        "X and Y must be different inputs for 2D sweep.", RED)
+                z_kpi = sweep_kpis[0]   # contour shows one KPI at a time
+                N = 5
+                swp = ParameterSweep(hooks["builder"], params, hooks["kpi_fn"]).run(
+                    {sweep_x: _range(sweep_x, N), sweep_y: _range(sweep_y, N)})
+                sweep_contour(swp, p, kpi=z_kpi,
+                              title=f"{z_kpi}  over  ({sweep_x}, {sweep_y})  [5×5]")
+                label = f"2D sweep: {sweep_x} × {sweep_y} → {z_kpi}"
+                chart_kwargs = {"kpi": z_kpi,
+                                "title": f"{z_kpi} over ({sweep_x}, {sweep_y})"}
             else:
-                base_v = float(vals[sweep_input])
-                lo, hi = base_v * 0.8, base_v * 1.2
-            N = 10
-            values = [lo + (hi - lo) * i / (N - 1) for i in range(N)]
-            swp = ParameterSweep(hooks["builder"], params, hooks["kpi_fn"]).run(
-                {sweep_input: values})
-            chart_kwargs = {"kpis": hooks["kpis"], "title": f"Sweep over {sweep_input}",
-                            "subplots": True}
-            sweep_chart(swp, p, **chart_kwargs)
-            label = f"Sweep over {sweep_input}: {lo:g} → {hi:g}, {N} points"
+                N = 10
+                swp = ParameterSweep(hooks["builder"], params, hooks["kpi_fn"]).run(
+                    {sweep_x: _range(sweep_x, N)})
+                sweep_chart(swp, p, kpis=list(sweep_kpis),
+                            title=f"Sweep over {sweep_x}", subplots=True)
+                label = f"1D sweep: {sweep_x} → {len(sweep_kpis)} KPIs"
+                chart_kwargs = {"kpis": list(sweep_kpis),
+                                "title": f"Sweep over {sweep_x}",
+                                "subplots": True}
             study_result = swp
             banner = _msg(label, NAVY)
 
@@ -1093,19 +1203,27 @@ def _run_study(kind: str, data, sweep_input):
               Output("banner", "children", allow_duplicate=True),
               Input("b-study-sens", "n_clicks"),
               State("last", "data"),
+              State("study-sens-inputs", "value"),
+              State("study-sens-kpis",   "value"),
               prevent_initial_call=True)
-def _on_study_sens(_n, data):
-    return _run_study("sensitivity", data, None)
+def _on_study_sens(_n, data, sens_inputs, sens_kpis):
+    return _run_study("sensitivity", data,
+                       sens_inputs=sens_inputs, sens_kpis=sens_kpis)
 
 
 @app.callback(Output("chart", "src", allow_duplicate=True),
               Output("banner", "children", allow_duplicate=True),
               Input("b-study-sweep", "n_clicks"),
               State("last", "data"),
-              State("study-sweep-input", "value"),
+              State("study-sweep-mode", "value"),
+              State("study-sweep-x",    "value"),
+              State("study-sweep-y",    "value"),
+              State("study-sweep-kpis", "value"),
               prevent_initial_call=True)
-def _on_study_sweep(_n, data, sweep_input):
-    return _run_study("sweep", data, sweep_input)
+def _on_study_sweep(_n, data, mode, sweep_x, sweep_y, sweep_kpis):
+    return _run_study("sweep", data, sweep_mode=mode,
+                       sweep_x=sweep_x, sweep_y=sweep_y,
+                       sweep_kpis=sweep_kpis)
 
 
 @app.callback(Output("chart", "src", allow_duplicate=True),
@@ -1114,7 +1232,7 @@ def _on_study_sweep(_n, data, sweep_input):
               State("last", "data"),
               prevent_initial_call=True)
 def _on_study_scen(_n, data):
-    return _run_study("scenarios", data, None)
+    return _run_study("scenarios", data)
 
 
 # ─── Latest-study status + standalone Study CSV / Excel downloads ─────────────

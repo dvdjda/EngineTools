@@ -21,12 +21,23 @@ if _ROOT not in sys.path:
 from nexa_toolkit.framework.contract import Engine, InputSpec, OutputSpec, register
 from simulators.gt_system.system       import GTSystemParams, build_gt_system, summary
 from simulators.gt_system.feasibility  import feasibility
+from simulators.gt_system.audit         import gt_system_audit_checks
 from nexablock.audit                    import audit
 from nexablock.viz.svg                 import render as render_svg
 
 
+_MODE_NUM_TO_OP   = {0: "island", 1: "grid_tied"}
+_MODE_NUM_TO_GTP  = {0: "auto", 1: "manual"}
+_MODE_NUM_TO_SPL  = {0: "auto", 1: "manual"}
+
+
 def _params_from(v: dict) -> GTSystemParams:
-    """Build a GTSystemParams from the v1 UI input dict. Shared with subclasses."""
+    """Build a GTSystemParams from the v1 UI input dict. Shared with subclasses.
+
+    Mode inputs are encoded as small integers via InputSpec.choices, so we
+    translate them here. When a mode is `auto`, the corresponding manual
+    input (load_pct / libr_frac / external_load_kW in grid) is read but
+    ignored by the controller — it's only used in manual mode."""
     return GTSystemParams(
         p_rated_kW   = float(v["p_rated_kW"]),
         load_pct     = float(v["load_pct"]),
@@ -49,6 +60,10 @@ def _params_from(v: dict) -> GTSystemParams:
         libr_pump_frac = float(v.get("libr_pump_frac", 0.015)),
         ct_fan_frac    = float(v.get("ct_fan_frac",    0.015)),
         bop_frac       = float(v.get("bop_frac",       0.010)),
+        operating_mode    = _MODE_NUM_TO_OP.get(int(v.get("operating_mode",    0)), "island"),
+        gt_power_mode     = _MODE_NUM_TO_GTP.get(int(v.get("gt_power_mode",    0)), "auto"),
+        steam_split_mode  = _MODE_NUM_TO_SPL.get(int(v.get("steam_split_mode", 0)), "auto"),
+        external_load_kW  = float(v.get("external_load_kW", 0.0)),
     )
 
 
@@ -90,6 +105,18 @@ class GTSystemV2(Engine):
         InputSpec("libr_pump_frac", "LiBr pump fraction (of cooling)",       "-", 0.015, 0.0, 0.05),
         InputSpec("ct_fan_frac",    "CT fan fraction (of rejected heat)",    "-", 0.015, 0.0, 0.10),
         InputSpec("bop_frac",       "Plant BoP fraction (lights/HVAC, of GT)","-", 0.010, 0.0, 0.05),
+        # Operating + control modes (dimensionless: no unit shown,
+        # no Custom… entry — pure two-state selectors).
+        InputSpec("operating_mode",   "Operating mode",                "-", 0, 0, 1,
+                  choices={"Island": 0, "Grid-tied": 1}),
+        InputSpec("gt_power_mode",    "GT power control",              "-", 0, 0, 1,
+                  choices={"Auto (follow NEXA demand)": 0,
+                            "Manual (use load_pct above)": 1}),
+        InputSpec("steam_split_mode", "Steam split control",           "-", 0, 0, 1,
+                  choices={"Auto (LiBr-priority · MED residual)": 0,
+                            "Manual (use libr_frac above)": 1}),
+        InputSpec("external_load_kW", "External load (kW) — island mode only",
+                  "kW", 0.0, 0.0, 1_000_000.0),
     ]
 
     def solve(self, v: dict) -> dict:
@@ -99,12 +126,14 @@ class GTSystemV2(Engine):
             "solved":      solved,
             "kpis":        summary(solved),
             "feasibility": feasibility(solved, bop_frac=params.bop_frac),
-            "audit":       audit(solved),
+            "audit":       audit(solved,
+                                  extra_checks=gt_system_audit_checks(
+                                      solved, bop_frac=params.bop_frac)),
         }
 
     def outputs(self, r: dict) -> list:
         k = r["kpis"]
-        return [
+        rows = [
             OutputSpec("GT actual power",       k["GT actual power kW"],   "kW",     "verified", "{:.0f}"),
             OutputSpec("NG consumption",        k["NG consumption Nm3h"],  "Nm³/h",  "verified", "{:.0f}"),
             OutputSpec("Steam generation",      k["Steam generation t/h"], "t/h",    "verified", "{:.2f}"),
@@ -112,6 +141,28 @@ class GTSystemV2(Engine):
             OutputSpec("GPU IT load",           k["GPU IT load kW"],       "kW",     "verified", "{:.0f}"),
             OutputSpec("MED water production",  k["MED water m3day"],      "m³/day", "verified", "{:.0f}"),
         ]
+        # Mode / control-derived KPIs — show only when relevant.
+        solved = r.get("solved")
+        cs = getattr(solved, "control", None) if solved is not None else None
+        if cs is not None:
+            if cs.derived_load_pct:
+                rows.append(OutputSpec(
+                    "GT load_pct (auto-derived)", cs.load_pct, "%",
+                    "verified", "{:.1f}"))
+            if cs.derived_libr_frac:
+                rows.append(OutputSpec(
+                    "libr_frac (auto-derived)", cs.libr_frac, "-",
+                    "verified", "{:.3f}"))
+        op_mode = getattr(solved, "operating_mode", "island") if solved is not None else "island"
+        if op_mode == "grid_tied":
+            rows.append(OutputSpec(
+                "Grid export", k.get("Grid export kW", 0.0), "kW",
+                "verified", "{:.0f}"))
+        else:
+            rows.append(OutputSpec(
+                "External load (island)", k.get("External load kW", 0.0), "kW",
+                "input", "{:.0f}"))
+        return rows
 
     def highlights(self, r: dict) -> list:
         outs = self.outputs(r)
@@ -140,18 +191,23 @@ class GTSystemV2(Engine):
             "make_params":  _params_from,
             "kpi_fn":       summary,
             "kpis":         ["GT actual power kW", "Steam generation t/h",
-                             "LiBr cooling kW",    "MED water m3day"],
+                             "LiBr cooling kW",    "MED water m3day",
+                             "GPU IT load kW",     "Grid export kW"],
             "sensitivity_inputs": ["load_pct", "gt_eff", "libr_frac", "libr_cop",
-                                   "hrsg_eff_pct", "med_effects", "t_ambient_C"],
+                                   "hrsg_eff_pct", "med_effects", "t_ambient_C",
+                                   "gpu_it_kW", "external_load_kW"],
             "sweep_inputs": ["load_pct", "gt_eff", "libr_frac", "libr_cop",
-                             "hrsg_eff_pct", "t_ambient_C"],
+                             "hrsg_eff_pct", "t_ambient_C",
+                             "gpu_it_kW", "external_load_kW"],
             "bounds": {
-                "load_pct":     (10.0, 100.0),
-                "gt_eff":       (0.15,  0.45),
-                "libr_frac":    (0.05,  0.95),
-                "libr_cop":     (0.5,   0.85),
-                "hrsg_eff_pct": (50.0,  95.0),
-                "t_ambient_C":  (-10.0, 55.0),
+                "load_pct":         (10.0,   100.0),
+                "gt_eff":           (0.15,    0.45),
+                "libr_frac":        (0.05,    0.95),
+                "libr_cop":         (0.5,     0.85),
+                "hrsg_eff_pct":     (50.0,    95.0),
+                "t_ambient_C":      (-10.0,   55.0),
+                "gpu_it_kW":        (100.0,   50_000.0),
+                "external_load_kW": (0.0,     20_000.0),
             },
             "step_override": {"med_effects": 1.0},
             "scenarios": {

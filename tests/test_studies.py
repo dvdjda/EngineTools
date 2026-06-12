@@ -23,7 +23,11 @@ from nexablock.studies            import (ParameterSweep, SweepResult,
 
 @pytest.fixture(scope="module")
 def base():
-    return GTSystemParams()
+    # Studies need manual modes so swept/perturbed inputs actually take
+    # effect — under auto, the controller overrides load_pct and libr_frac
+    # from the demand chain. Manual mode preserves the studies semantics.
+    return GTSystemParams(gt_power_mode="manual", steam_split_mode="manual",
+                          operating_mode="island")
 
 
 @pytest.fixture(scope="module")
@@ -203,8 +207,10 @@ def test_sens_unknown_input_raises(base):
 
 def test_bounds_clamp_at_load_100():
     """Base load_pct=99.5 with bounds (10,100): high clamps to 100, low at ~98.5.
-    span < 2h, dY/dX still finite."""
-    base = GTSystemParams(load_pct=99.5)
+    span < 2h, dY/dX still finite. Manual modes so the load_pct override
+    actually takes effect (auto would re-resolve from demand)."""
+    base = GTSystemParams(load_pct=99.5, gt_power_mode="manual",
+                          steam_split_mode="manual")
     s = OneAtATimeSensitivity(
         builder=build_gt_system, base_params=base, kpi_fn=summary,
         rel_step=0.01, bounds={"load_pct": (10.0, 100.0)})
@@ -431,9 +437,40 @@ def test_scenarios_figure_has_expected_bars(scenarios_result):
 
 # ── 2-D contour placeholder ──────────────────────────────────────────────────
 
-def test_sweep_contour_not_implemented(load_sweep, tmp_path):
-    with pytest.raises(NotImplementedError, match="contour"):
-        sweep_contour(load_sweep, str(tmp_path / "x.png"), kpi="any")
+def test_sweep_contour_renders_real_2d_grid(base, tmp_path):
+    """sweep_contour now works on a 2D sweep result: 5×5 grid of (load_pct,
+    libr_frac) → MED water contour. Produces a valid PNG, file > 1 KB,
+    headers OK."""
+    swp = ParameterSweep(build_gt_system, base, summary).run({
+        "load_pct":  [50, 60, 70, 80, 90],
+        "libr_frac": [0.3, 0.4, 0.5, 0.6, 0.7],
+    })
+    p = tmp_path / "contour.png"
+    sweep_contour(swp, str(p), kpi="MED water m3day")
+    _assert_valid_png(p)
+
+
+def test_sweep_contour_rejects_1d_sweep(load_sweep, tmp_path):
+    """A 1D sweep can't feed a 2D contour — must raise."""
+    with pytest.raises(ValueError, match="exactly 2"):
+        sweep_contour(load_sweep, str(tmp_path / "x.png"),
+                       kpi="Steam generation t/h")
+
+
+def test_tornado_multi_chart_renders_one_panel_per_kpi(sens, tmp_path):
+    """Multi-panel tornado: N KPIs → N stacked axes."""
+    from nexablock.studies import tornado_multi_chart
+    from nexablock.studies.charts import _tornado_multi_figure
+    fig = _tornado_multi_figure(sens, kpis=[
+        "MED water m3day", "Steam generation t/h", "GT actual power kW"])
+    try:
+        assert len(fig.axes) == 3
+    finally:
+        _plt.close(fig)
+    p = tmp_path / "multi.png"
+    tornado_multi_chart(sens, str(p),
+                         kpis=["MED water m3day", "Steam generation t/h"])
+    _assert_valid_png(p)
 
 
 # ── engine wiring: GT load-sweep screening shows the chart in the chart slot ─

@@ -54,19 +54,29 @@ class GTSystemParams:
     libr_pump_frac: float = 0.015    # LiBr solution+refrigerant pumps as fraction of cooling
     ct_fan_frac:    float = 0.015    # CT fans as fraction of rejected heat
     bop_frac:       float = 0.010    # Plant balance-of-plant (lights/HVAC/etc) as fraction of GT power
+    # ── Operating + control modes ────────────────────────────────────────────
+    operating_mode:    str   = "island"     # "island" | "grid_tied"
+    gt_power_mode:     str   = "auto"       # "auto" | "manual"  — auto: follow GPU/cooling demand
+    steam_split_mode:  str   = "auto"       # "auto" | "manual"  — auto: LiBr-priority, MED gets residual
+    external_load_kW:  float = 0.0          # island: user-entered; grid_tied: ignored (auto-export)
 
 
 def build_gt_system(p: GTSystemParams) -> SolvedSystem:
+    """Instantiate / wire / solve. When gt_power_mode or steam_split_mode
+    is "auto", resolve load_pct / libr_frac through control_setpoints
+    before instantiating blocks so the solve uses the auto-tuned setpoint.
+
+    Stashes resolved control state on the SolvedSystem as `.control` for
+    downstream renderers (feasibility, audit, reports).
     """
-    Instantiate and wire all blocks, return the solved system.
-    GPU cassette params derived from gpu_it_kW + pue:
-      n_gpu × p_gpu = gpu_it_kW  (single virtual cassette representing the DC)
-    """
+    from .control import control_setpoints
+    cs = control_setpoints(p)
+
     sys = System("GT System — GT + HRSG + LiBr + GPU + MED")
 
     # ── Instantiate blocks ────────────────────────────────────────────────────
     gt      = sys.add(GasTurbine(
-                p_rated_kW=p.p_rated_kW, load_pct=p.load_pct,
+                p_rated_kW=p.p_rated_kW, load_pct=cs.load_pct,
                 gt_eff=p.gt_eff, t_ambient_C=p.t_ambient_C,
                 t_exhaust_C=p.t_exhaust_C, aux_frac=p.gt_aux_frac))
 
@@ -75,7 +85,7 @@ def build_gt_system(p: GTSystemParams) -> SolvedSystem:
                 steam_p_bar=p.steam_p_bar,
                 fw_t_C=p.fw_t_C))
 
-    splitter= sys.add(SteamSplitter(libr_frac=p.libr_frac))
+    splitter= sys.add(SteamSplitter(libr_frac=cs.libr_frac))
 
     chiller = sys.add(LiBrChiller(
                 cop=p.libr_cop, chw_sup_C=p.chw_sup_C, chw_dt_K=p.chw_dt_K,
@@ -112,7 +122,11 @@ def build_gt_system(p: GTSystemParams) -> SolvedSystem:
     sys.connect(chiller.outlets["chw_supply"], gpu.inlets["coolant_in"])
 
     # ── Solve ─────────────────────────────────────────────────────────────────
-    return sys.solve()
+    solved = sys.solve()
+    # Attach resolved control state for downstream consumers.
+    solved.control = cs            # type: ignore[attr-defined]
+    solved.operating_mode = p.operating_mode  # type: ignore[attr-defined]
+    return solved
 
 
 def summary(solved: SolvedSystem) -> dict[str, float]:
@@ -132,4 +146,11 @@ def summary(solved: SolvedSystem) -> dict[str, float]:
     kpis["LiBr cooling kW"]        = _get(LiBrChiller, "Cooling capacity kW")  or 0.0
     kpis["GPU IT load kW"]         = _get(GPUCassette, "IT power")             or 0.0
     kpis["MED water m3day"]        = _get(MED, "Water production m3/day")      or 0.0
+    # Control / mode reflection — exposed to study hooks + the report.
+    cs = getattr(solved, "control", None)
+    if cs is not None:
+        kpis["Resolved load_pct"]    = cs.load_pct
+        kpis["Resolved libr_frac"]   = cs.libr_frac
+        kpis["External load kW"]     = cs.external_load_kW
+        kpis["Grid export kW"]       = cs.grid_export_kW
     return kpis

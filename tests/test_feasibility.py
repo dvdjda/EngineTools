@@ -20,6 +20,17 @@ def engine():
     return get("gt_system_v2")
 
 
+def _manual_defaults(engine):
+    """Defaults pinned to manual modes so libr_frac / load_pct overrides
+    take effect — the feasibility tests target the original v1-trusted
+    operating point semantics."""
+    v = engine.defaults()
+    v["gt_power_mode"]     = 1     # manual
+    v["steam_split_mode"]  = 1     # manual
+    v["operating_mode"]    = 0     # island
+    return v
+
+
 # ── shape ────────────────────────────────────────────────────────────────────
 
 def test_feasibility_carries_two_balances(engine):
@@ -40,11 +51,11 @@ def test_aggregate_feasible_iff_every_balance_passes():
 
 # ── defaults reveal a real cooling deficit ───────────────────────────────────
 
-def test_default_power_feasible_cooling_deficit(engine):
-    """At defaults the GT supplies enough kW but the LiBr doesn't deliver
-    enough cooling for 5 MW of GPU — a real design gap the framework now
-    surfaces, not a bug to silence."""
-    f = engine.solve(engine.defaults())["feasibility"]
+def test_manual_legacy_power_feasible_cooling_deficit(engine):
+    """v1-legacy manual operating point (load_pct=85, libr_frac=0.5,
+    island): GT supplies enough kW but LiBr undersized for 5 MW GPU
+    cooling demand — the original ~1660 kW cooling gap."""
+    f = engine.solve(_manual_defaults(engine))["feasibility"]
     power   = f.by("Power")
     cooling = f.by("Cooling capacity")
     assert power.feasible
@@ -52,7 +63,7 @@ def test_default_power_feasible_cooling_deficit(engine):
     assert not cooling.feasible
     assert 1500 < cooling.shortfall < 1800, (
         f"cooling shortfall {cooling.shortfall:.0f} kW outside ~1660 band")
-    assert f.feasible is False   # aggregate fails because cooling fails
+    assert f.feasible is False
 
 
 # ── higher LiBr split closes the cooling gap ────────────────────────────────
@@ -60,11 +71,19 @@ def test_default_power_feasible_cooling_deficit(engine):
 def test_higher_libr_split_makes_cooling_feasible(engine):
     """libr_frac=0.85 sends most steam to the chiller. Cooling supply jumps
     above the GPU heat demand and the aggregate becomes feasible."""
-    v = engine.defaults(); v["libr_frac"] = 0.85
+    v = _manual_defaults(engine); v["libr_frac"] = 0.85
     f = engine.solve(v)["feasibility"]
     assert f.by("Cooling capacity").feasible
     assert f.by("Cooling capacity").supply > f.by("Cooling capacity").demand
     assert f.feasible
+
+
+def test_grid_mode_default_feasible(engine):
+    """Grid mode at defaults: GT auto-ramps to cool GPU; export covers excess."""
+    v = engine.defaults(); v["operating_mode"] = 1   # grid_tied
+    f = engine.solve(v)["feasibility"]
+    assert f.feasible
+    assert f.by("Cooling capacity").feasible
 
 
 # ── cooling-balance contents are auditable ──────────────────────────────────
@@ -73,7 +92,7 @@ def test_cooling_breakdown_lists_silicon_overhead_and_libr(engine):
     """Cassette overhead is split out so the report shows that the cooling
     side must absorb BOTH silicon heat AND in-cassette overhead (pumps,
     controls etc)."""
-    c = engine.solve(engine.defaults())["feasibility"].by("Cooling capacity")
+    c = engine.solve(_manual_defaults(engine))["feasibility"].by("Cooling capacity")
     assert set(c.breakdown.keys()) == {
         "LiBr cooling capacity", "GPU silicon heat", "Cassette overhead heat"}
     assert c.unit == "kW"
@@ -86,9 +105,19 @@ def test_cooling_breakdown_lists_silicon_overhead_and_libr(engine):
 
 
 def test_cooling_assumption_text_present(engine):
-    c = engine.solve(engine.defaults())["feasibility"].by("Cooling capacity")
+    c = engine.solve(_manual_defaults(engine))["feasibility"].by("Cooling capacity")
     assert "immersion" in c.assumption.lower()
     assert "libr" in c.assumption.lower()
+
+
+def test_power_assumption_reflects_operating_mode(engine):
+    """Island and grid get different assumption strings — the report should
+    never read as if the mode could be misinterpreted."""
+    island = engine.solve(_manual_defaults(engine))["feasibility"].by("Power")
+    v = engine.defaults(); v["operating_mode"] = 1
+    grid = engine.solve(v)["feasibility"].by("Power")
+    assert "island" in island.assumption.lower()
+    assert "grid" in grid.assumption.lower() and "export-only" in grid.assumption.lower()
 
 
 # ── power balance: structure still itemised at screening fidelity ───────────
@@ -96,8 +125,8 @@ def test_cooling_assumption_text_present(engine):
 def test_power_breakdown_itemises_supply_info_and_every_demand(engine):
     """Breakdown shows derated supply ceiling, current operating point + headroom
     (info-only rows), and every demand component including the cassette overhead
-    split-out from silicon."""
-    p = engine.solve(engine.defaults())["feasibility"].by("Power")
+    split-out from silicon. In island mode, an External load line is present."""
+    p = engine.solve(_manual_defaults(engine))["feasibility"].by("Power")
     for k in (
         "GT derated capacity (available)",
         "GT current output (info)",
@@ -109,12 +138,22 @@ def test_power_breakdown_itemises_supply_info_and_every_demand(engine):
         "Cooling tower fan electrical",
         "GT auxiliaries",
         "Plant BoP (lights/HVAC)",
+        "External load (island, manual)",
     ):
         assert k in p.breakdown, f"missing {k!r}"
         assert p.breakdown[k] is not None, f"{k} must be modelled"
-    # Supply is derated, NOT actual.
     assert p.supply == p.breakdown["GT derated capacity (available)"]
     assert p.supply > p.breakdown["GT current output (info)"]
+
+
+def test_grid_mode_breakdown_has_grid_export_line(engine):
+    """Grid mode: the external load line is replaced by Grid export
+    (computed, positive-only)."""
+    v = engine.defaults(); v["operating_mode"] = 1
+    p = engine.solve(v)["feasibility"].by("Power")
+    assert "Grid export (computed, export-only)" in p.breakdown
+    assert "External load (island, manual)" not in p.breakdown
+    assert p.breakdown["Grid export (computed, export-only)"] >= 0
 
 
 def test_each_block_emits_its_own_aux_row(engine):
@@ -139,17 +178,18 @@ def test_bop_frac_zeroes_facility_load(engine):
 # ── high-GPU case fails BOTH balances ───────────────────────────────────────
 
 def test_high_gpu_load_fails_both_power_and_cooling(engine):
-    """gpu_it_kW=10000 → both balances fail. With derated as supply, the
-    power shortfall is smaller (~1630 kW vs ~3000 kW at operating point)
-    because the GT has headroom to ramp before going infeasible."""
-    v = engine.defaults(); v["gpu_it_kW"] = 10000.0
+    """gpu_it_kW=10000 in MANUAL mode at the v1-legacy operating point
+    (load_pct=85, libr_frac=0.5): both balances fail. With derated as
+    supply, the power shortfall is smaller (~1630 kW vs ~3000 kW at
+    operating point)."""
+    v = _manual_defaults(engine); v["gpu_it_kW"] = 10000.0
     f = engine.solve(v)["feasibility"]
     p = f.by("Power")
     c = f.by("Cooling capacity")
     assert not p.feasible
     assert not c.feasible
-    assert 1500 < p.shortfall < 1800      # power shortfall ~1630 kW vs derated
-    assert 6500 < c.shortfall < 7200      # cooling shortfall ~6900 kW
+    assert 1500 < p.shortfall < 1800
+    assert 6500 < c.shortfall < 7200
     assert not f.feasible
 
 

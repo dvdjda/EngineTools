@@ -288,8 +288,12 @@ def test_xlsx_defaults_show_cooling_deficit(engine, vals, solved, tmp_path):
 
 
 def test_xlsx_balanced_design_no_deficits(engine, tmp_path):
-    """libr_frac=0.85 sends most steam to the chiller → both balances OK."""
-    v = engine.defaults(); v["libr_frac"] = 0.85
+    """libr_frac=0.85 in MANUAL modes sends most steam to the chiller →
+    both balances OK."""
+    v = engine.defaults()
+    v["gt_power_mode"]    = 1   # manual
+    v["steam_split_mode"] = 1   # manual
+    v["libr_frac"]        = 0.85
     r = engine.solve(v)
     p = tmp_path / "balanced.xlsx"
     build_excel(engine, v, r, str(p))

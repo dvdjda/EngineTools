@@ -35,6 +35,14 @@ _P = GTSystemParams(
     gpu_pue      = 1.05,
     med_effects  = 8,
     sw_t_C       = 28.0,
+    # Pin to manual modes so the v2 promotion validation runs against the
+    # same operating point as the v1 trusted GT tool (load_pct=85,
+    # libr_frac=0.5). Auto modes are the new default-for-engineers behaviour
+    # but the trusted-tool comparison must use explicit setpoints.
+    gt_power_mode    = "manual",
+    steam_split_mode = "manual",
+    operating_mode   = "island",
+    external_load_kW = 0.0,
 )
 
 @pytest.fixture(scope="module")

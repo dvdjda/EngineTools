@@ -21,11 +21,19 @@ from nexablock.blocks import (GasTurbine, GPUCassette, MED, LiBrChiller,
                               CoolingTower)
 
 
-POWER_ASSUMPTION = (
-    "Supply is the GT derated capacity at site ambient (the available "
-    "envelope). Operating point and operating headroom shown for context. "
-    "Demand is itemised at the current operating point; aux loads scale "
-    "with current output, not with the derated ceiling."
+POWER_ASSUMPTION_ISLAND = (
+    "Island mode: no grid backstop. GT must supply ALL demand (GPU + plant "
+    "aux + external load). Imports forbidden. Supply is the GT derated "
+    "capacity at site ambient; operating point and headroom shown for "
+    "context. Demand is itemised at the current operating point."
+)
+
+POWER_ASSUMPTION_GRID = (
+    "Grid-tied (export-only): GT follows NEXA needs (GPU + plant aux). "
+    "Excess electrical exports to the grid; imports are forbidden. Supply "
+    "is the GT derated capacity at site ambient; current output and "
+    "headroom shown for context. Grid export is computed as supply − "
+    "NEXA demand."
 )
 
 COOLING_ASSUMPTION = (
@@ -98,7 +106,7 @@ def _make(resource, unit, supply, demand, assumption, breakdown):
 
 # ── per-resource balances ────────────────────────────────────────────────────
 
-def power_balance(solved, assumption: str = POWER_ASSUMPTION,
+def power_balance(solved, assumption: str | None = None,
                   bop_frac: float = 0.010) -> ResourceBalance:
     """Electrical supply/demand.
 
@@ -126,8 +134,18 @@ def power_balance(solved, assumption: str = POWER_ASSUMPTION,
     gt_aux_kW   = _read(gt,   "GT aux electrical")
     bop_aux_kW  = max(0.0, bop_frac) * actual_kW             # scales with current operating point
 
-    demand_kW = (silicon_kW + overhead_kW + med_aux_kW + libr_aux_kW
-                 + ct_aux_kW + gt_aux_kW + bop_aux_kW)
+    # Mode-specific terms (read from the resolved control state).
+    cs = getattr(solved, "control", None)
+    operating_mode = getattr(solved, "operating_mode", "island")
+    external_load_kW = cs.external_load_kW if cs is not None else 0.0
+    grid_export_kW   = cs.grid_export_kW   if cs is not None else 0.0
+
+    if assumption is None:
+        assumption = (POWER_ASSUMPTION_GRID if operating_mode == "grid_tied"
+                       else POWER_ASSUMPTION_ISLAND)
+
+    nexa_demand = (silicon_kW + overhead_kW + med_aux_kW + libr_aux_kW
+                   + ct_aux_kW + gt_aux_kW + bop_aux_kW)
 
     breakdown = {
         "GT derated capacity (available)": derated_kW,
@@ -141,6 +159,16 @@ def power_balance(solved, assumption: str = POWER_ASSUMPTION,
         "GT auxiliaries":                  gt_aux_kW,
         "Plant BoP (lights/HVAC)":         bop_aux_kW,
     }
+    if operating_mode == "island":
+        breakdown["External load (island, manual)"] = external_load_kW
+        demand_kW = nexa_demand + external_load_kW
+    else:  # grid_tied
+        # Grid export is a positive-only sink; shown as info, doesn't enter the
+        # balance equation (NEXA demand is the only hard constraint, with the
+        # GT supplying it from derated headroom).
+        breakdown["Grid export (computed, export-only)"] = grid_export_kW
+        demand_kW = nexa_demand
+
     return _make("Power", "kW", derated_kW, demand_kW, assumption, breakdown)
 
 
