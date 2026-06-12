@@ -6,10 +6,11 @@ This is the safe, deterministic half of "describe a tool and it appears":
  - scaffold_tool(spec)       writes a CONFORMING DRAFT module from a template and
                              registers it, so it shows up in the dropdown badged "draft"
 
-The other half - turning a free-text request into a filled spec and real solve()
-logic - is the agent's job (Cody), and it runs sandboxed and stays "draft" until you
-verify and promote it. Cody fills the template; it never writes free-form architecture,
-which is what keeps every generated tool uniform and reviewable.
+The other half — turning a free-text request into a filled spec and real solve()
+logic — is done afterwards in chat with the assistant. The draft skeleton stays
+"draft" until you verify and promote it. The assistant only fills the template;
+it never writes free-form architecture, which is what keeps every generated tool
+uniform and reviewable.
 """
 import json
 import os
@@ -77,7 +78,7 @@ class {cls}(Engine):
     ]
 
     def solve(self, v):
-        # TODO (Cody, sandboxed): implement the real logic for this tool.
+        # TODO: ask the assistant in chat to fill in the real logic for this tool.
         return dict(v)
 
     def outputs(self, v):

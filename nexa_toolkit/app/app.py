@@ -3,7 +3,7 @@ Nexa process toolkit - generic UI with a tool-request box.
 
 Pick a system and its inputs/results/chart/downloads build themselves from the
 contract. "Request a tool" captures a description, records it, and scaffolds a
-conforming DRAFT that appears in the dropdown badged "draft" - the agent (Cody)
+conforming DRAFT that appears in the dropdown badged "draft" - the assistant
 fills its logic, sandboxed, and it stays draft until you promote it.
 
 Run:
@@ -950,8 +950,10 @@ app.layout = html.Div([
     html.Div([
         html.Div([
             html.Div("Request a tool", style={"fontSize": "18px", "fontWeight": "700", "color": NAVY, "marginBottom": "8px"}),
-            html.Div("Describe what you need. Cody drafts a conforming tool; it appears below as a draft "
-                     "until you verify and promote it.", style={"fontSize": "13px", "color": GREY, "marginBottom": "12px"}),
+            html.Div("Describe what you need. A draft skeleton is created and appears below badged "
+                     "\"draft\"; the logic gets filled in afterwards in chat with the assistant. "
+                     "It stays draft until you verify and promote it.",
+                     style={"fontSize": "13px", "color": GREY, "marginBottom": "12px"}),
             dcc.Textarea(id="req-text", placeholder="e.g. I need a process simulator for a single-stage flash desalination unit...",
                          style={"width": "100%", "height": "120px", "padding": "10px", "border": f"1px solid {LINE}",
                                 "borderRadius": "8px", "fontSize": "14px", "boxSizing": "border-box"}),
