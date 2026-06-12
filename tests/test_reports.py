@@ -261,7 +261,6 @@ def test_xlsx_high_gpu_load_shows_both_deficits(engine, hooks, tmp_path):
     assert "Power balance"             in joined
     assert "Cooling capacity balance"  in joined
     assert "Assumption"                in joined
-    assert "derated"                   in joined.lower()
     assert "immersion"                 in joined.lower()
     assert "unverified"                in joined
     for line in ("LiBr pump electrical",
@@ -271,7 +270,8 @@ def test_xlsx_high_gpu_load_shows_both_deficits(engine, hooks, tmp_path):
                  "LiBr cooling capacity",
                  "GPU silicon heat",
                  "Cassette overhead",
-                 "GT derated capacity"):
+                 "GT actual power (supply)",
+                 "Derated capacity (max available)"):
         assert line in joined, f"line {line!r} missing"
     assert "no recycle loops" in joined
 
@@ -290,20 +290,18 @@ def test_xlsx_gpu_10mw_shows_cooling_deficit(engine, tmp_path):
     assert "unverified"    in joined
 
 
-def test_xlsx_balanced_design_no_deficits(engine, tmp_path):
-    """libr_frac=0.85 in MANUAL modes sends most steam to the chiller →
-    both balances OK."""
-    v = engine.defaults()
-    v["gt_power_mode"]    = 1   # manual
-    v["steam_split_mode"] = 1   # manual
-    v["libr_frac"]        = 0.85
+def test_xlsx_grid_auto_default_no_deficits(engine, tmp_path):
+    """Grid/auto at defaults: GT auto-ramps to match cooling needs and
+    exports any surplus. Both balances close cleanly."""
+    v = engine.defaults(); v["operating_mode"] = 1   # grid_tied
     r = engine.solve(v)
-    p = tmp_path / "balanced.xlsx"
+    p = tmp_path / "grid_clean.xlsx"
     build_excel(engine, v, r, str(p))
     joined = _xlsx_cells(p)
     assert "Power balance"            in joined
     assert "Cooling capacity balance" in joined
     assert "POWER DEFICIT"            not in joined
+    assert "POWER BUS"                not in joined  # no excess in grid (exports)
     assert "COOLING CAPACITY DEFICIT" not in joined
 
 

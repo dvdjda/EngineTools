@@ -22,19 +22,21 @@ from nexablock.blocks import (GasTurbine, GPUCassette, MED, LiBrChiller,
 
 
 POWER_ASSUMPTION_ISLAND = (
-    "Island mode: no grid backstop. GT must supply ALL demand (GPU + plant "
-    "aux + external load). Imports forbidden. Supply is the GT derated "
-    "capacity at site ambient; operating point and headroom shown for "
-    "context. Demand is itemised at the current operating point."
+    "Island bus closure: GT actual power = GPU + cassette overhead + plant "
+    "aux + external load. No grid backstop — excess electrical has nowhere "
+    "to go (a non-zero positive imbalance means the flowsheet didn't close "
+    "and convergence is suspect). Screening tolerance 2.5% absorbs "
+    "controller-vs-block precision noise."
 )
 
 POWER_ASSUMPTION_GRID = (
-    "Grid-tied (export-only): GT follows NEXA needs (GPU + plant aux). "
-    "Excess electrical exports to the grid; imports are forbidden. Supply "
-    "is the GT derated capacity at site ambient; current output and "
-    "headroom shown for context. Grid export is computed as supply − "
-    "NEXA demand."
+    "Grid-tied (export-only) bus closure: GT actual power = NEXA demand + "
+    "grid export. Surplus electrical exports automatically; imports are "
+    "forbidden. Grid export equals GT actual − NEXA demand (positive only). "
+    "Screening tolerance 2.5% absorbs controller-vs-block precision noise."
 )
+
+POWER_TOL_REL = 0.025      # 2.5% screening tolerance for bus closure
 
 COOLING_ASSUMPTION = (
     "Single-phase immersion: all GPU silicon power plus cassette overhead "
@@ -104,17 +106,25 @@ def _read(block, label):
 
 
 def _make(resource, unit, supply, demand, assumption, breakdown, *,
-          tol_rel: float = 0.0):
-    """Common assembly path for a ResourceBalance with optional screening
-    tolerance: balances with shortfall ≤ tol_rel × demand are treated as
-    feasible (the supply-side noise is below screening fidelity)."""
+          tol_rel: float = 0.0, closure: bool = False):
+    """Common assembly path for a ResourceBalance with optional screening tolerance.
+
+    closure=False (default, used for cooling): only deficit (supply < demand)
+        is a problem. Shortfalls within tol_rel × demand are screening noise.
+    closure=True (used for power): the bus must CLOSE — both excess (supply >
+        demand, no sink) and deficit (supply < demand, no source) violate
+        conservation. |balance| within tol_rel × demand is OK; outside it,
+        flag with the appropriate direction.
+    """
     balance   = supply - demand
-    raw_short = max(0.0, -balance)
     threshold = tol_rel * max(abs(demand), 1e-12)
-    feasible  = raw_short <= threshold
-    # When feasible-within-tolerance, suppress the displayed shortfall so the
-    # report doesn't simultaneously read "Balance OK" and "Shortfall 100 kW".
-    shortfall = 0.0 if feasible else raw_short
+    if closure:
+        feasible = abs(balance) <= threshold
+        shortfall = 0.0 if feasible else abs(balance)
+    else:
+        raw_short = max(0.0, -balance)
+        feasible = raw_short <= threshold
+        shortfall = 0.0 if feasible else raw_short
     return ResourceBalance(
         resource=resource, unit=unit,
         feasible=feasible,
@@ -142,9 +152,8 @@ def power_balance(solved, assumption: str | None = None,
     libr = _first(solved, LiBrChiller)
     ct   = _first(solved, CoolingTower)
 
-    derated_kW = _read(gt, "GT derated capacity")            # supply ceiling
-    actual_kW  = _read(gt, "GT actual power")                # operating point (info)
-    headroom_kW = derated_kW - actual_kW
+    derated_kW = _read(gt, "GT derated capacity")            # info only
+    actual_kW  = _read(gt, "GT actual power")                # SUPPLY — what GT really produces
 
     silicon_kW   = _read(gpu, "IT power")
     overhead_kW  = _read(gpu, "Cassette overhead electrical")
@@ -153,9 +162,8 @@ def power_balance(solved, assumption: str | None = None,
     libr_aux_kW = _read(libr, "LiBr pump electrical")
     ct_aux_kW   = _read(ct,   "CT fan electrical")
     gt_aux_kW   = _read(gt,   "GT aux electrical")
-    bop_aux_kW  = max(0.0, bop_frac) * actual_kW             # scales with current operating point
+    bop_aux_kW  = max(0.0, bop_frac) * actual_kW
 
-    # Mode-specific terms (read from the resolved control state).
     cs = getattr(solved, "control", None)
     operating_mode = getattr(solved, "operating_mode", "island")
     external_load_kW = cs.external_load_kW if cs is not None else 0.0
@@ -168,10 +176,13 @@ def power_balance(solved, assumption: str | None = None,
     nexa_demand = (silicon_kW + overhead_kW + med_aux_kW + libr_aux_kW
                    + ct_aux_kW + gt_aux_kW + bop_aux_kW)
 
+    # Breakdown reflects the bus equation:
+    #   SUPPLY (positive)  =  GT actual
+    #   DEMAND (negative)  =  every consumer
+    # In grid mode, "Grid export" is one of the consumers (positive value).
     breakdown = {
-        "GT derated capacity (available)": derated_kW,
-        "GT current output (info)":        actual_kW,
-        "Operating headroom (info)":       headroom_kW,
+        "GT actual power (supply)":        +actual_kW,
+        "Derated capacity (max available)": derated_kW,   # info only
         "GPU silicon (IT power)":          silicon_kW,
         "Cassette overhead (pumps/ctl)":   overhead_kW,
         "MED electrical (pumps)":          med_aux_kW,
@@ -184,13 +195,12 @@ def power_balance(solved, assumption: str | None = None,
         breakdown["External load (island, manual)"] = external_load_kW
         demand_kW = nexa_demand + external_load_kW
     else:  # grid_tied
-        # Grid export is a positive-only sink; shown as info, doesn't enter the
-        # balance equation (NEXA demand is the only hard constraint, with the
-        # GT supplying it from derated headroom).
-        breakdown["Grid export (computed, export-only)"] = grid_export_kW
-        demand_kW = nexa_demand
+        breakdown["Grid export (sent to grid)"] = grid_export_kW
+        demand_kW = nexa_demand + grid_export_kW
 
-    return _make("Power", "kW", derated_kW, demand_kW, assumption, breakdown)
+    # closure=True so BOTH excess and deficit flag (bus must close).
+    return _make("Power", "kW", actual_kW, demand_kW, assumption, breakdown,
+                  tol_rel=POWER_TOL_REL, closure=True)
 
 
 def cooling_balance(solved, assumption: str = COOLING_ASSUMPTION) -> ResourceBalance:

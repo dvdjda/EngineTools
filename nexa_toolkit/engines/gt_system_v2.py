@@ -133,12 +133,33 @@ class GTSystemV2(Engine):
 
     def outputs(self, r: dict) -> list:
         k = r["kpis"]
+        # Cassette PUE + plant-aux total drilled out so this table doubles as
+        # the NEXA-detail panel (per request).
+        gpu_pue, plant_aux_total = 1.0, 0.0
+        solved = r.get("solved")
+        if solved is not None:
+            from nexablock.blocks import (GasTurbine, GPUCassette, LiBrChiller,
+                                            MED, CoolingTower)
+            def _r(cls, label, default=0.0):
+                b = next((x for x in solved.blocks if isinstance(x, cls)), None)
+                return b.results[label].value if b and label in b.results else default
+            gpu_pue = _r(GPUCassette, "PUE  (approx)", 1.0)
+            plant_aux_total = (
+                _r(MED,           "MED electrical")
+                + _r(LiBrChiller, "LiBr pump electrical")
+                + _r(CoolingTower,"CT fan electrical")
+                + _r(GasTurbine,  "GT aux electrical")
+            )
+
         rows = [
             OutputSpec("GT actual power",       k["GT actual power kW"],   "kW",     "verified", "{:.0f}"),
             OutputSpec("NG consumption",        k["NG consumption Nm3h"],  "Nm³/h",  "verified", "{:.0f}"),
             OutputSpec("Steam generation",      k["Steam generation t/h"], "t/h",    "verified", "{:.2f}"),
             OutputSpec("LiBr cooling capacity", k["LiBr cooling kW"],      "kW",     "verified", "{:.0f}"),
             OutputSpec("GPU IT load",           k["GPU IT load kW"],       "kW",     "verified", "{:.0f}"),
+            OutputSpec("  · GPU PUE",           gpu_pue,                   "-",      "verified", "{:.3f}"),
+            OutputSpec("  · Plant aux total (pumps/fans/HVAC/lights)",
+                                                plant_aux_total,           "kW",     "verified", "{:.0f}"),
             OutputSpec("MED water production",  k["MED water m3day"],      "m³/day", "verified", "{:.0f}"),
         ]
         # Mode / control-derived KPIs — show only when relevant.
@@ -165,8 +186,12 @@ class GTSystemV2(Engine):
         return rows
 
     def highlights(self, r: dict) -> list:
+        """Four highlight cards at the top of the results pane:
+        GT actual power · Steam generation · GPU IT load · MED water production.
+        Index 5 (GPU PUE) and 6 (Plant aux total) are sub-rows of GPU IT
+        load in the Results table and intentionally not promoted to cards."""
         outs = self.outputs(r)
-        return [outs[0], outs[2], outs[5]]   # GT power, steam, water
+        return [outs[0], outs[2], outs[4], outs[7]]
 
     def chart(self, r: dict, path: str) -> str:
         with open(path, "w", encoding="utf-8") as f:

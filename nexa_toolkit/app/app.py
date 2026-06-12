@@ -43,20 +43,116 @@ NAVY = "#2E4E7E"; TEAL = "#2BB6A3"; LIGHT = "#EAF0F8"; GREY = "#5b6675"
 INK = "#22303F"; BG = "#f4f7fb"; LINE = "#dbe2ee"; RED = "#C0392B"
 BASIS = {"verified": "#2E7D4E", "screening": "#B26A00", "input": "#5b6675", "unverified": RED}
 
-# AI model selector — add future models here; first entry is the default
+# AI model selector — comprehensive Anthropic Claude model list.
+# Static so the dropdown populates without an API call; if the user wants
+# a model that's launched after this list was written, they can type its
+# ID into the model dropdown (it's `searchable` so freeform values work).
 AI_MODELS = [
-    {"label": "Claude Haiku  (fast)",   "value": "claude-haiku-4-5"},
-    {"label": "Claude Sonnet  (smart)", "value": "claude-sonnet-4-6"},
+    # Claude 4 family
+    {"label": "Claude Opus 4.7 (1M context)",       "value": "claude-opus-4-7"},
+    {"label": "Claude Opus 4.6",                    "value": "claude-opus-4-6"},
+    {"label": "Claude Opus 4.5",                    "value": "claude-opus-4-5"},
+    {"label": "Claude Opus 4.1",                    "value": "claude-opus-4-1"},
+    {"label": "Claude Sonnet 4.6",                  "value": "claude-sonnet-4-6"},
+    {"label": "Claude Sonnet 4.5",                  "value": "claude-sonnet-4-5"},
+    {"label": "Claude Haiku 4.5 (fast)",            "value": "claude-haiku-4-5"},
+    # Claude 3.7 family
+    {"label": "Claude 3.7 Sonnet (latest)",         "value": "claude-3-7-sonnet-latest"},
+    {"label": "Claude 3.7 Sonnet (2025-02-19)",     "value": "claude-3-7-sonnet-20250219"},
+    # Claude 3.5 family
+    {"label": "Claude 3.5 Sonnet v2 (latest)",      "value": "claude-3-5-sonnet-latest"},
+    {"label": "Claude 3.5 Sonnet v2 (2024-10-22)",  "value": "claude-3-5-sonnet-20241022"},
+    {"label": "Claude 3.5 Sonnet v1 (2024-06-20)",  "value": "claude-3-5-sonnet-20240620"},
+    {"label": "Claude 3.5 Haiku (latest)",          "value": "claude-3-5-haiku-latest"},
+    {"label": "Claude 3.5 Haiku (2024-10-22)",      "value": "claude-3-5-haiku-20241022"},
+    # Claude 3 family
+    {"label": "Claude 3 Opus (latest)",             "value": "claude-3-opus-latest"},
+    {"label": "Claude 3 Opus (2024-02-29)",         "value": "claude-3-opus-20240229"},
+    {"label": "Claude 3 Sonnet (2024-02-29)",       "value": "claude-3-sonnet-20240229"},
+    {"label": "Claude 3 Haiku (2024-03-07)",        "value": "claude-3-haiku-20240307"},
 ]
-# Note: if a model isn't in the gateway catalog, calls fall back to the gateway's
-# configured default model. The model_used label in the UI reflects the actual model used.
-AI_MODEL_DEFAULT = AI_MODELS[0]["value"]
+# Default to a smart-and-capable Opus when first opened; user can pick any.
+AI_MODEL_DEFAULT = "claude-sonnet-4-6"
 
 CARD = {"background": "white", "border": f"1px solid {LINE}", "borderRadius": "10px",
         "padding": "18px 20px", "boxShadow": "0 1px 3px rgba(20,40,80,0.06)"}
 
 app = dash.Dash(__name__, title="EngineTools")
 server = app.server
+
+
+# ── Markdown docs Flask route ────────────────────────────────────────────────
+# Serves docs/*.md as styled HTML in a new browser tab. Header bar matches
+# the app's navy theme; tables / code blocks / blockquotes styled to match.
+
+_DOCS_DIR = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "..", "docs"))
+
+_DOC_CSS = """
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+       max-width: 920px; margin: 0 auto 60px auto; padding: 0 24px;
+       line-height: 1.65; color: #22303F; font-size: 15px; }
+.header { background: #2E4E7E; color: white; padding: 18px 28px;
+          margin: 0 -24px 28px -24px; }
+.header .title { font-size: 14px; font-weight: 600; }
+.header .crumb { font-size: 13px; opacity: 0.85; }
+h1 { color: #2E4E7E; border-bottom: 2px solid #2E4E7E; padding-bottom: 8px;
+     margin-top: 36px; font-size: 28px; }
+h2 { color: #2E4E7E; border-bottom: 1px solid #dbe2ee; padding-bottom: 4px;
+     margin-top: 28px; font-size: 22px; }
+h3 { color: #2E4E7E; margin-top: 22px; font-size: 17px; }
+code { background: #EAF0F8; padding: 2px 6px; border-radius: 4px;
+       font-size: 92%; color: #22303F; font-family: 'SF Mono', Consolas, monospace; }
+pre { background: #f4f7fb; padding: 14px 18px; border-radius: 6px;
+      overflow-x: auto; border: 1px solid #dbe2ee; }
+pre code { background: none; padding: 0; font-size: 13px; }
+table { border-collapse: collapse; width: 100%; margin: 18px 0; font-size: 14px; }
+th, td { border: 1px solid #dbe2ee; padding: 8px 12px; text-align: left;
+         vertical-align: top; }
+th { background: #EAF0F8; color: #2E4E7E; font-weight: 700; }
+blockquote { border-left: 4px solid #2BB6A3; padding: 6px 16px;
+             background: #f4f7fb; color: #5b6675; margin: 18px 0; }
+a { color: #2BB6A3; text-decoration: none; }
+a:hover { text-decoration: underline; }
+hr { border: none; border-top: 1px solid #dbe2ee; margin: 28px 0; }
+ul, ol { padding-left: 24px; }
+li { margin-bottom: 4px; }
+.toc { background: #f4f7fb; border: 1px solid #dbe2ee; border-radius: 6px;
+       padding: 12px 18px; margin: 12px 0 24px 0; font-size: 14px; }
+"""
+
+
+@server.route("/docs/<path:filename>")
+def serve_doc(filename):
+    """Serve docs/*.md as styled HTML in a new tab. Only files actually in
+    docs/ are servable; path-traversal attempts get 404."""
+    from flask import abort, Response
+    if not filename.endswith(".md"):
+        abort(404)
+    path = os.path.normpath(os.path.join(_DOCS_DIR, filename))
+    if not path.startswith(_DOCS_DIR) or not os.path.isfile(path):
+        abort(404)
+    with open(path, encoding="utf-8") as f:
+        md_text = f.read()
+    try:
+        import markdown as _md
+        html_body = _md.markdown(
+            md_text,
+            extensions=["tables", "fenced_code", "toc", "sane_lists"],
+            extension_configs={"toc": {"toc_class": "toc"}},
+        )
+    except ImportError:
+        html_body = f"<pre>{md_text}</pre>"
+    page = (f"<!DOCTYPE html><html><head><meta charset='utf-8'>"
+            f"<title>{filename} — EngineTools docs</title>"
+            f"<style>{_DOC_CSS}</style></head><body>"
+            f"<div class='header'>"
+            f"<div class='title'>EngineTools Documentation</div>"
+            f"<div class='crumb'>docs / {filename}</div>"
+            f"</div>"
+            f"{html_body}"
+            f"</body></html>")
+    return Response(page, mimetype="text/html")
 
 
 def build_options():
@@ -183,42 +279,55 @@ def audit_card(r):
 
 
 def _balance_card(b):
-    """Single resource-balance card (green when feasible, red when not)."""
-    GREEN = "#2E7D4E"
+    """Single resource-balance card. Neutral white background by default;
+    audit is the authoritative pass/fail signal so this card never claims
+    ✓ green. Goes red only when there's a real engineering issue (deficit
+    or, for power closure, excess that has nowhere to go)."""
     summary = (f"Supply {b.supply:,.0f} {b.unit} · "
                f"Demand {b.demand:,.0f} {b.unit} · "
                f"Balance {b.balance:+,.0f} {b.unit}")
+
     if b.feasible:
+        # Neutral card — informational, no ✓ sign.
         return html.Div([
             html.Div([
-                html.Span("✓ ", style={"fontWeight": "800", "fontSize": "16px",
-                                        "color": GREEN}),
                 html.Span(f"{b.resource} balance",
                           style={"fontWeight": "700", "fontSize": "14px",
-                                 "color": GREEN, "marginRight": "10px"}),
+                                 "color": NAVY, "marginRight": "10px"}),
                 html.Span(summary, style={"fontSize": "13px", "color": INK}),
             ]),
             html.Div(f"Assumption: {b.assumption}",
                      style={"fontSize": "11px", "color": GREY,
                             "marginTop": "4px", "fontStyle": "italic"}),
         ], style={
-            "background": "#EAF7EE", "border": f"1px solid {GREEN}",
+            "background": "white", "border": f"1px solid {LINE}",
             "borderRadius": "8px", "padding": "10px 14px",
             "marginBottom": "10px",
         })
 
+    # Failure mode — work out the right verb. Power closure can fail with
+    # EXCESS (no sink in island) or DEFICIT (supply < demand).
+    if b.resource == "Power" and b.balance > 0:
+        title = "POWER BUS DID NOT CLOSE — excess electrical"
+        body  = (f"GT actual {b.supply:,.0f} {b.unit} > demand "
+                  f"{b.demand:,.0f} {b.unit}, residual "
+                  f"+{abs(b.balance):,.0f} {b.unit}. In island mode this "
+                  f"means the flowsheet didn't converge: there's no sink "
+                  f"for the surplus.")
+    else:
+        title = f"{b.resource.upper()} DEFICIT"
+        body  = (f"demand {b.demand:,.0f} {b.unit} > supply "
+                  f"{b.supply:,.0f} {b.unit}, shortfall "
+                  f"{b.shortfall:,.0f} {b.unit}")
     return html.Div([
         html.Div([
             html.Span("⚠ ", style={"fontWeight": "800", "fontSize": "18px"}),
-            html.Span(f"{b.resource.upper()} DEFICIT",
+            html.Span(title,
                       style={"fontWeight": "800", "fontSize": "15px",
                              "letterSpacing": "0.5px"}),
         ], style={"marginBottom": "6px"}),
-        html.Div(
-            f"demand {b.demand:,.0f} {b.unit} > supply "
-            f"{b.supply:,.0f} {b.unit}, shortfall "
-            f"{b.shortfall:,.0f} {b.unit}",
-            style={"fontSize": "13px", "fontWeight": "700", "marginBottom": "4px"}),
+        html.Div(body,
+                 style={"fontSize": "13px", "fontWeight": "700", "marginBottom": "4px"}),
         html.Div(f"Assumption: {b.assumption}",
                  style={"fontSize": "11px", "opacity": "0.85"}),
     ], style={
@@ -412,26 +521,17 @@ def build_smart_section(engine, v, r):
     return html.Div(parts, style={**CARD, "marginBottom": "16px"}) if parts else None
 
 
-# ── OpenClaw gateway config (read once at import) ──────────────────────────
-def _oc_gateway_config():
-    """Return (base_url, bearer_token, provider_model) for the local OpenClaw gateway."""
-    import json, os
-    cfg_path = os.path.expanduser("~/.openclaw/openclaw.json")
-    try:
-        with open(cfg_path) as f:
-            cfg = json.load(f)
-        gw  = cfg.get("gateway", {})
-        port  = gw.get("port", 18789)
-        token = gw.get("auth", {}).get("token", "")
-        return f"http://localhost:{port}/v1", token
-    except Exception:
-        return "http://localhost:18789/v1", ""
+def call_ai_narrative(engine, v, r, model=None, api_key=None):
+    """Call Claude directly via the Anthropic SDK.
 
-_OC_BASE_URL, _OC_TOKEN = _oc_gateway_config()
+    The API key comes from (in priority order):
+      1. The `api_key` argument — typically the UI's stored key (dcc.Store
+         with storage_type="local", persisted in browser localStorage).
+      2. ANTHROPIC_API_KEY in the environment.
 
-
-def call_ai_narrative(engine, v, r, model=None):
-    """Call the OpenClaw local gateway (OpenAI-compat) for AI analysis. Falls back to direct Anthropic."""
+    No gateways. No fallbacks. If neither key is available or the call
+    fails, the UI shows a clear inline error and reports stay clear of
+    AI content."""
     model = model or AI_MODEL_DEFAULT
     inp_txt = "\n".join(f"  {s.label}: {v[s.key]:g} {s.unit}" for s in engine.inputs)
     out_txt = "\n".join(
@@ -475,52 +575,33 @@ def call_ai_narrative(engine, v, r, model=None):
     )
     text = None
     model_used = None
-    last_err = None
+    err = None
 
-    # --- primary: OpenClaw local gateway via requests (no extra deps) ---
+    import os as _os
+    resolved_key = api_key or _os.environ.get("ANTHROPIC_API_KEY")
+    if not resolved_key:
+        return html.Div(
+            "AI Analysis unavailable: no Anthropic API key. Paste your key "
+            "in the AI Analysis card below (it stores in your browser only, "
+            "never on the server) — or export ANTHROPIC_API_KEY in the env "
+            "before starting the app.",
+            style={"fontSize": "12px", "color": RED, "fontStyle": "italic"}), None
+
     try:
-        import requests as _req
-        url  = f"{_OC_BASE_URL}/chat/completions"
-        body = {
-            "model":      "openclaw/default",
-            "max_tokens": 1400,
-            "messages":   [{"role": "user", "content": prompt}],
-        }
-        auth_hdrs = {
-            "Authorization": f"Bearer {_OC_TOKEN}",
-            "Content-Type":  "application/json",
-        }
-        # Try with explicit model override first
-        r = _req.post(url, headers={**auth_hdrs, "x-openclaw-model": f"anthropic/{model}"},
-                      json=body, timeout=180)
-        if r.status_code in (400, 404):
-            # Model not in catalog or needs different params; retry with gateway default
-            r = _req.post(url, headers=auth_hdrs, json=body, timeout=180)
-            r.raise_for_status()
-            model_used = f"gateway default  (anthropic/{model}: {r.status_code})"
-        else:
-            r.raise_for_status()
-            model_used = f"anthropic/{model}  (via OpenClaw gateway)"
-        text = r.json()["choices"][0]["message"]["content"]
+        import anthropic as _ant
+        client = _ant.Anthropic(api_key=resolved_key)
+        msg = client.messages.create(
+            model=model, max_tokens=1400,
+            messages=[{"role": "user", "content": prompt}])
+        text = msg.content[0].text
+        model_used = f"anthropic/{model}"
     except Exception as e:
-        last_err = f"{type(e).__name__}: {e}"
-
-    # --- fallback: direct Anthropic SDK (needs ANTHROPIC_API_KEY in env) ---
-    if text is None:
-        try:
-            import anthropic as _ant
-            msg = _ant.Anthropic().messages.create(
-                model=model, max_tokens=1400,
-                messages=[{"role": "user", "content": prompt}])
-            text = msg.content[0].text
-            model_used = f"anthropic/{model}"
-        except Exception as e:
-            last_err = f"{last_err}  |  fallback: {type(e).__name__}: {e}"
+        err = f"{type(e).__name__}: {e}"
 
     if text is None:
         return html.Div(
-            f"AI unavailable. Error: {last_err}",
-            style={"fontSize": "12px", "color": GREY}), None
+            f"AI call failed: {err}",
+            style={"fontSize": "12px", "color": RED}), None
 
     # render each numbered section with a bold heading
     import re as _re
@@ -646,9 +727,33 @@ app.layout = html.Div([
             html.Div("Nexa Block v1 - pick a tool, run it, export the report; or request a new one",
                      style={"fontSize": "13px", "opacity": "0.85", "marginTop": "2px"}),
         ]),
-        html.Button("+ Request a tool", id="req-open", n_clicks=0, style={
-            "padding": "10px 16px", "borderRadius": "7px", "border": "1px solid white",
-            "background": "transparent", "color": "white", "cursor": "pointer", "fontWeight": "600"}),
+        html.Div([
+            # Docs picker — opens the chosen markdown file rendered as styled
+            # HTML in a new browser tab via the /docs/<name> Flask route.
+            html.Div([
+                html.Span("📖 Docs:", style={"fontSize": "13px", "marginRight": "8px",
+                                              "opacity": "0.85"}),
+                html.A("Simulator", href="/docs/NEXA_SIMULATOR.md", target="_blank",
+                       style={"color": "white", "fontSize": "12px",
+                              "marginRight": "10px", "textDecoration": "underline"}),
+                html.A("Manual",    href="/docs/MANUAL.md", target="_blank",
+                       style={"color": "white", "fontSize": "12px",
+                              "marginRight": "10px", "textDecoration": "underline"}),
+                html.A("Dictionary", href="/docs/DICTIONARY.md", target="_blank",
+                       style={"color": "white", "fontSize": "12px",
+                              "marginRight": "10px", "textDecoration": "underline"}),
+                html.A("Architecture", href="/docs/ARCHITECTURE.md", target="_blank",
+                       style={"color": "white", "fontSize": "12px",
+                              "marginRight": "10px", "textDecoration": "underline"}),
+                html.A("Index", href="/docs/README.md", target="_blank",
+                       style={"color": "white", "fontSize": "12px",
+                              "textDecoration": "underline"}),
+            ], style={"display": "flex", "alignItems": "center",
+                      "marginRight": "20px"}),
+            html.Button("+ Request a tool", id="req-open", n_clicks=0, style={
+                "padding": "10px 16px", "borderRadius": "7px", "border": "1px solid white",
+                "background": "transparent", "color": "white", "cursor": "pointer", "fontWeight": "600"}),
+        ], style={"display": "flex", "alignItems": "center"}),
     ], style={"background": NAVY, "color": "white", "padding": "20px 28px", "display": "flex",
               "justifyContent": "space-between", "alignItems": "center"}),
 
@@ -773,11 +878,42 @@ app.layout = html.Div([
                     html.Div("AI Analysis",
                              style={"fontWeight": "700", "color": NAVY, "fontSize": "14px"}),
                     dcc.Dropdown(
-                        id="ai-model", clearable=False,
+                        id="ai-model", clearable=False, searchable=True,
                         options=AI_MODELS, value=AI_MODEL_DEFAULT,
-                        style={"width": "220px", "fontSize": "13px"}),
+                        style={"width": "320px", "fontSize": "12px"}),
                 ], style={"display": "flex", "alignItems": "center",
                           "justifyContent": "space-between", "marginBottom": "10px"}),
+
+                # API key row \u2014 input + save + remove + status. The actual key
+                # lives in dcc.Store(storage_type="local") so it persists in
+                # the user's browser only, never on the server filesystem.
+                html.Div([
+                    dcc.Input(id="ai-key-input", type="password",
+                              placeholder="paste Anthropic API key (sk-ant-...)",
+                              style={"flex": "1", "fontSize": "12px",
+                                     "padding": "6px 10px",
+                                     "border": f"1px solid {LINE}",
+                                     "borderRadius": "6px",
+                                     "marginRight": "6px"}),
+                    html.Button("Save key", id="b-ai-key-save", n_clicks=0,
+                                style={"padding": "6px 12px", "borderRadius": "6px",
+                                       "fontSize": "12px", "fontWeight": "600",
+                                       "cursor": "pointer", "background": "white",
+                                       "color": NAVY, "marginRight": "6px",
+                                       "border": f"1px solid {NAVY}"}),
+                    html.Button("Remove", id="b-ai-key-clear", n_clicks=0,
+                                style={"padding": "6px 12px", "borderRadius": "6px",
+                                       "fontSize": "12px", "fontWeight": "600",
+                                       "cursor": "pointer", "background": "white",
+                                       "color": RED,
+                                       "border": f"1px solid {RED}"}),
+                ], style={"display": "flex", "alignItems": "center",
+                          "marginBottom": "8px"}),
+                html.Div(id="ai-key-status",
+                         style={"fontSize": "11px", "color": GREY,
+                                "marginBottom": "10px",
+                                "fontStyle": "italic"}),
+
                 _btn("\u26a1 AI Explain", "b-ai-explain"),
                 dcc.Loading(type="dot", color=TEAL,
                             children=html.Div(id="ai-narrative",
@@ -837,6 +973,8 @@ app.layout = html.Div([
 
     dcc.Store(id="last"),
     dcc.Store(id="ai-text"),   # stores plain-text AI narrative for report export
+    # API key persists in the user's browser localStorage; never on the server.
+    dcc.Store(id="ai-key-store", storage_type="local"),
 ], style={"background": BG, "minHeight": "100vh", "fontFamily": "Arial, Helvetica, sans-serif"})
 
 
@@ -936,16 +1074,64 @@ def _refresh_queue(_n):
               Input("b-ai-explain", "n_clicks"),
               State("last", "data"),
               State("ai-model", "value"),
+              State("ai-key-store", "data"),
               prevent_initial_call=True)
-def _ai_explain(_n, data, model):
+def _ai_explain(_n, data, model, api_key):
     if not data:
         return html.Div("Run a calculation first, then click AI Explain.",
                         style={"fontSize": "12px", "color": GREY}), None
     engine = get(data["key"])
     vals   = data["vals"]
     r      = engine.solve(vals)
-    html_div, plain_text = call_ai_narrative(engine, vals, r, model=model or AI_MODEL_DEFAULT)
+    html_div, plain_text = call_ai_narrative(engine, vals, r,
+                                              model=model or AI_MODEL_DEFAULT,
+                                              api_key=api_key)
     return html_div, plain_text
+
+
+# ─── API key save / clear / status ─────────────────────────────────────────
+
+@app.callback(Output("ai-key-store", "data", allow_duplicate=True),
+              Output("ai-key-input", "value", allow_duplicate=True),
+              Input("b-ai-key-save", "n_clicks"),
+              State("ai-key-input", "value"),
+              prevent_initial_call=True)
+def _ai_key_save(_n, value):
+    """Persist the typed key into browser localStorage; clear the input field."""
+    if not value or not value.strip():
+        return no_update, no_update
+    return value.strip(), ""
+
+
+@app.callback(Output("ai-key-store", "data", allow_duplicate=True),
+              Input("b-ai-key-clear", "n_clicks"),
+              prevent_initial_call=True)
+def _ai_key_clear(_n):
+    """Remove the key from browser localStorage."""
+    return None
+
+
+@app.callback(Output("ai-key-status", "children"),
+              Input("ai-key-store", "data"))
+def _ai_key_status(stored):
+    """Show whether a key is stored and a redacted hint of which one."""
+    import os as _os
+    if stored:
+        # show last 4 chars only — confirms identity without exposing the key
+        hint = ("…" + stored[-4:]) if len(stored) > 4 else "…"
+        return html.Span([
+            html.Span("✓ Key stored in browser ",
+                       style={"color": "#2E7D4E", "fontWeight": "600"}),
+            html.Span(f"({hint})", style={"color": GREY}),
+        ])
+    env_key = _os.environ.get("ANTHROPIC_API_KEY")
+    if env_key:
+        return html.Span(
+            "ANTHROPIC_API_KEY found in server env — will be used if no key "
+            "is saved here.", style={"color": GREY})
+    return html.Span(
+        "No API key. Paste your Anthropic key above and click Save.",
+        style={"color": RED})
 
 
 # Latest study per engine. Populated by the three study callbacks; read by

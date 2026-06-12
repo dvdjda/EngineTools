@@ -17,8 +17,44 @@ HEX_GREY = "595959"
 BASIS_COLOR = {"verified": "2E7D4E", "screening": "B26A00", "input": "595959", "unverified": "C0392B"}
 
 
-def _design_rows(engine, values):
-    return [(i.label, f"{values[i.key]:g}", i.unit) for i in engine.inputs]
+def _design_rows(engine, values, result=None):
+    """Build the design-point rows for the report.
+
+    When the engine surfaces a resolved-control state (gt_system_v2 in auto
+    modes), hide the manual inputs whose values are ignored at this operating
+    point and append the auto-derived equivalents below — so the report
+    accurately reads as the actual operating point, not stale UI defaults.
+    """
+    cs = None; op_mode = "island"
+    if isinstance(result, dict):
+        solved = result.get("solved")
+        if solved is not None:
+            cs = getattr(solved, "control", None)
+            op_mode = getattr(solved, "operating_mode", "island")
+
+    rows = []
+    for i in engine.inputs:
+        # Hide mode-controlled inputs when auto / mode override applies.
+        if cs is not None:
+            if i.key == "load_pct"         and cs.derived_load_pct:    continue
+            if i.key == "libr_frac"        and cs.derived_libr_frac:   continue
+            if i.key == "external_load_kW" and op_mode == "grid_tied": continue
+        rows.append((i.label, f"{values[i.key]:g}", i.unit))
+
+    # Auto-derived rows — give the report a single source of truth for what
+    # the controller actually picked.
+    if cs is not None:
+        if cs.derived_load_pct:
+            rows.append(("GT load_pct  (Auto-derived)",
+                         f"{cs.load_pct:.1f}", "%"))
+        if cs.derived_libr_frac:
+            rows.append(("Steam fraction to LiBr  (Auto-derived)",
+                         f"{cs.libr_frac:.3f}", "-"))
+        if op_mode == "grid_tied":
+            rows.append(("Grid export  (Auto)",
+                         f"{cs.grid_export_kW:.0f}", "kW"))
+
+    return rows
 
 
 def _convergence_of(result):
@@ -263,7 +299,7 @@ def build_excel(engine, values, result, path, ai_text=None, study=None):
     band("A4", "Design point (inputs)", "C4")
     header(5, ("Quantity", "Value", "Unit"))
     row = 6
-    for name, val, unit in _design_rows(engine, values):
+    for name, val, unit in _design_rows(engine, values, result):
         ws[f"A{row}"] = name
         ws[f"B{row}"] = val; ws[f"B{row}"].font = Font(name="Arial", color="0000FF")
         ws[f"C{row}"] = unit
@@ -459,7 +495,7 @@ def build_pdf(engine, values, result, path, chart_png, ai_text=None, study=None)
 
     # design point table
     story.append(Paragraph("Design point", sec))
-    d = Table([[n, v, u] for (n, v, u) in _design_rows(engine, values)],
+    d = Table([[n, v, u] for (n, v, u) in _design_rows(engine, values, result)],
               colWidths=[W * 0.55, W * 0.18, W * 0.27])
     d.setStyle(TableStyle([
         ("FONT", (0, 0), (-1, -1), "Helvetica", 9), ("TEXTCOLOR", (0, 0), (-1, -1), ink),
