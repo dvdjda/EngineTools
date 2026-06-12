@@ -20,7 +20,7 @@ if _ROOT not in sys.path:
 
 from nexa_toolkit.framework.contract import Engine, InputSpec, OutputSpec, register
 from simulators.gt_system.system       import GTSystemParams, build_gt_system, summary
-from simulators.gt_system.feasibility  import power_balance
+from simulators.gt_system.feasibility  import feasibility
 from nexablock.viz.svg                 import render as render_svg
 
 
@@ -97,7 +97,7 @@ class GTSystemV2(Engine):
         return {
             "solved":      solved,
             "kpis":        summary(solved),
-            "feasibility": power_balance(solved, bop_frac=params.bop_frac),
+            "feasibility": feasibility(solved, bop_frac=params.bop_frac),
         }
 
     def outputs(self, r: dict) -> list:

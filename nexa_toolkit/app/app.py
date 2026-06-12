@@ -122,57 +122,62 @@ def _feasibility_status(r):
     return r.get("feasibility") if isinstance(r, dict) else None
 
 
-def feasibility_card(r):
-    """Power-balance card. Green when feasible, red+loud when not."""
-    feas = _feasibility_status(r)
-    if feas is None:
-        return html.Div()
+def _balance_card(b):
+    """Single resource-balance card (green when feasible, red when not)."""
     GREEN = "#2E7D4E"
-
-    summary = (f"Generation {feas.generation_kW:,.0f} kW · "
-               f"Demand {feas.demand_kW:,.0f} kW · "
-               f"Balance {feas.balance_kW:+,.0f} kW")
-
-    if feas.feasible:
+    summary = (f"Supply {b.supply:,.0f} {b.unit} · "
+               f"Demand {b.demand:,.0f} {b.unit} · "
+               f"Balance {b.balance:+,.0f} {b.unit}")
+    if b.feasible:
         return html.Div([
             html.Div([
                 html.Span("✓ ", style={"fontWeight": "800", "fontSize": "16px",
                                         "color": GREEN}),
-                html.Span("Power balance",
+                html.Span(f"{b.resource} balance",
                           style={"fontWeight": "700", "fontSize": "14px",
                                  "color": GREEN, "marginRight": "10px"}),
                 html.Span(summary, style={"fontSize": "13px", "color": INK}),
             ]),
-            html.Div(f"Assumption: {feas.assumption}",
+            html.Div(f"Assumption: {b.assumption}",
                      style={"fontSize": "11px", "color": GREY,
                             "marginTop": "4px", "fontStyle": "italic"}),
         ], style={
             "background": "#EAF7EE", "border": f"1px solid {GREEN}",
             "borderRadius": "8px", "padding": "10px 14px",
-            "marginBottom": "14px",
+            "marginBottom": "10px",
         })
 
     return html.Div([
         html.Div([
             html.Span("⚠ ", style={"fontWeight": "800", "fontSize": "18px"}),
-            html.Span("POWER DEFICIT",
+            html.Span(f"{b.resource.upper()} DEFICIT",
                       style={"fontWeight": "800", "fontSize": "15px",
                              "letterSpacing": "0.5px"}),
         ], style={"marginBottom": "6px"}),
         html.Div(
-            f"demand {feas.demand_kW:,.0f} kW > generation "
-            f"{feas.generation_kW:,.0f} kW, shortfall "
-            f"{feas.shortfall_kW:,.0f} kW",
+            f"demand {b.demand:,.0f} {b.unit} > supply "
+            f"{b.supply:,.0f} {b.unit}, shortfall "
+            f"{b.shortfall:,.0f} {b.unit}",
             style={"fontSize": "13px", "fontWeight": "700", "marginBottom": "4px"}),
-        html.Div("System cannot supply its own load. KPIs below are not self-consistent.",
-                 style={"fontSize": "12px", "fontStyle": "italic", "marginBottom": "6px"}),
-        html.Div(f"Assumption: {feas.assumption}",
+        html.Div(f"Assumption: {b.assumption}",
                  style={"fontSize": "11px", "opacity": "0.85"}),
     ], style={
         "background": RED, "color": "white",
         "borderRadius": "8px", "padding": "12px 16px",
-        "marginBottom": "14px",
+        "marginBottom": "10px",
     })
+
+
+def feasibility_card(r):
+    """One card per resource balance (power, cooling, ...). Empty Div if the
+    engine doesn't surface feasibility (v1 path)."""
+    feas = _feasibility_status(r)
+    if feas is None or not getattr(feas, "balances", None):
+        return html.Div()
+    return html.Div(
+        [_balance_card(b) for b in feas.balances],
+        style={"marginBottom": "4px"},
+    )
 
 
 def convergence_card(r):

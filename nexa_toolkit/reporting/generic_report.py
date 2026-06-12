@@ -252,48 +252,46 @@ def build_excel(engine, values, result, path, ai_text=None, study=None):
         else:
             row = crow + 2
 
-    # Power balance section — strictly independent of convergence.
+    # Resource balance bands — one per ResourceBalance.
     feas = _feasibility_of(result)
-    if feas is not None:
-        frow = row + 2
-        band(f"A{frow}", "Power balance", f"D{frow}")
-        ws.cell(frow + 1, 1, f"Assumption: {feas.assumption}").font = Font(
-            name="Arial", italic=True, size=10, color=HEX_GREY)
-        ws.merge_cells(f"A{frow + 1}:D{frow + 1}")
-        # Summary triplet
-        for i, (lab, val) in enumerate([
-            ("Generation",  feas.generation_kW),
-            ("Demand",      feas.demand_kW),
-            ("Balance",     feas.balance_kW),
-            ("Shortfall",   feas.shortfall_kW),
-        ], start=frow + 2):
-            ws.cell(i, 1, lab).font = Font(name="Arial", bold=True)
-            ws.cell(i, 2, round(val, 1))
-            ws.cell(i, 3, "kW")
-            if lab == "Balance":
-                ws.cell(i, 2).font = Font(
-                    name="Arial", bold=True,
-                    color=("2E7D4E" if feas.feasible else "C0392B"))
-        # Breakdown
-        bdrow = frow + 6
-        ws.cell(bdrow, 1, "Breakdown").font = Font(name="Arial", bold=True,
-                                                    color=HEX_GREY)
-        for i, (k, v) in enumerate(feas.breakdown.items(), start=bdrow + 1):
-            ws.cell(i, 1, k)
-            ws.cell(i, 2, "not modelled" if v is None else round(v, 1))
-            ws.cell(i, 3, "" if v is None else "kW")
-        next_row = bdrow + 1 + len(feas.breakdown)
-        if not feas.feasible:
-            ws.cell(next_row + 1, 1,
-                    f"⚠ POWER DEFICIT — demand {feas.demand_kW:,.0f} kW > "
-                    f"generation {feas.generation_kW:,.0f} kW, shortfall "
-                    f"{feas.shortfall_kW:,.0f} kW. "
-                    f"System cannot supply its own load.").font = Font(
-                name="Arial", bold=True, size=11, color="C0392B")
-            ws.merge_cells(f"A{next_row + 1}:D{next_row + 1}")
-            row = next_row + 2
-        else:
-            row = next_row
+    if feas is not None and getattr(feas, "balances", None):
+        for b in feas.balances:
+            frow = row + 2
+            band(f"A{frow}", f"{b.resource} balance", f"D{frow}")
+            ws.cell(frow + 1, 1, f"Assumption: {b.assumption}").font = Font(
+                name="Arial", italic=True, size=10, color=HEX_GREY)
+            ws.merge_cells(f"A{frow + 1}:D{frow + 1}")
+            for i, (lab, val) in enumerate([
+                ("Supply",    b.supply),
+                ("Demand",    b.demand),
+                ("Balance",   b.balance),
+                ("Shortfall", b.shortfall),
+            ], start=frow + 2):
+                ws.cell(i, 1, lab).font = Font(name="Arial", bold=True)
+                ws.cell(i, 2, round(val, 1))
+                ws.cell(i, 3, b.unit)
+                if lab == "Balance":
+                    ws.cell(i, 2).font = Font(
+                        name="Arial", bold=True,
+                        color=("2E7D4E" if b.feasible else "C0392B"))
+            bdrow = frow + 6
+            ws.cell(bdrow, 1, "Breakdown").font = Font(
+                name="Arial", bold=True, color=HEX_GREY)
+            for i, (k, v) in enumerate(b.breakdown.items(), start=bdrow + 1):
+                ws.cell(i, 1, k)
+                ws.cell(i, 2, "not modelled" if v is None else round(v, 1))
+                ws.cell(i, 3, "" if v is None else b.unit)
+            next_row = bdrow + 1 + len(b.breakdown)
+            if not b.feasible:
+                ws.cell(next_row + 1, 1,
+                        f"⚠ {b.resource.upper()} DEFICIT — demand {b.demand:,.0f} "
+                        f"{b.unit} > supply {b.supply:,.0f} {b.unit}, "
+                        f"shortfall {b.shortfall:,.0f} {b.unit}.").font = Font(
+                    name="Arial", bold=True, size=11, color="C0392B")
+                ws.merge_cells(f"A{next_row + 1}:D{next_row + 1}")
+                row = next_row + 2
+            else:
+                row = next_row
 
     start = row + 2
     band(f"A{start}", "Results", f"D{start}")
@@ -426,48 +424,49 @@ def build_pdf(engine, values, result, path, chart_png, ai_text=None, study=None)
                 "⚠ KPIs below may be unreliable — solve did not converge.",
                 warn_st))
 
-    # Power balance section (strictly separate from convergence).
+    # Resource balance sections — one per ResourceBalance, strictly separate
+    # from convergence.
     feas = _feasibility_of(result)
-    if feas is not None:
-        green = colors.HexColor("#2E7D4E"); red = colors.HexColor("#C0392B")
-        story.append(Spacer(1, 8))
-        story.append(Paragraph("Power balance", sec))
+    if feas is not None and getattr(feas, "balances", None):
+        green = colors.HexColor("#2E7D4E"); red_c = colors.HexColor("#C0392B")
         assum_st = ParagraphStyle("feas_assum", fontName="Helvetica-Oblique",
                                    fontSize=8.5, textColor=grey, spaceAfter=4)
-        story.append(Paragraph(f"Assumption: {feas.assumption}", assum_st))
-        bal_color = green if feas.feasible else red
-        bal_st = ParagraphStyle("feas_bal", fontName="Helvetica-Bold", fontSize=10,
-                                 textColor=bal_color)
-        story.append(Paragraph(
-            f"Generation {feas.generation_kW:,.0f} kW · "
-            f"Demand {feas.demand_kW:,.0f} kW · "
-            f"Balance {feas.balance_kW:+,.0f} kW", bal_st))
-        bd_rows = []
-        for k, v in feas.breakdown.items():
-            bd_rows.append([k, "not modelled" if v is None else f"{v:+,.1f} kW"])
-        if bd_rows:
-            bd = Table(bd_rows, colWidths=[W * 0.55, W * 0.35])
-            bd.setStyle(TableStyle([
-                ("FONT", (0, 0), (-1, -1), "Helvetica", 8.5),
-                ("TEXTCOLOR", (0, 0), (-1, -1), ink),
-                ("ROWBACKGROUNDS", (0, 0), (-1, -1), [colors.white, light]),
-                ("ALIGN", (1, 0), (-1, -1), "RIGHT"),
-                ("LEFTPADDING", (0, 0), (0, -1), 8),
-                ("TOPPADDING", (0, 0), (-1, -1), 2),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 2)]))
-            story.append(bd)
-        if not feas.feasible:
-            warn_st = ParagraphStyle("feas_warn", fontName="Helvetica-Bold",
-                                      fontSize=10.5,
-                                      textColor=colors.HexColor("#C0392B"),
-                                      backColor=colors.HexColor("#FBE9E7"),
-                                      borderPadding=6, borderRadius=4,
-                                      spaceBefore=6, spaceAfter=6)
+        for b in feas.balances:
+            story.append(Spacer(1, 8))
+            story.append(Paragraph(f"{b.resource} balance", sec))
+            story.append(Paragraph(f"Assumption: {b.assumption}", assum_st))
+            bal_color = green if b.feasible else red_c
+            bal_st = ParagraphStyle(f"feas_bal_{b.resource}", fontName="Helvetica-Bold",
+                                     fontSize=10, textColor=bal_color)
             story.append(Paragraph(
-                f"⚠ POWER DEFICIT — demand {feas.demand_kW:,.0f} kW &gt; "
-                f"generation {feas.generation_kW:,.0f} kW, "
-                f"shortfall {feas.shortfall_kW:,.0f} kW. "
-                f"System cannot supply its own load.", warn_st))
+                f"Supply {b.supply:,.0f} {b.unit} · "
+                f"Demand {b.demand:,.0f} {b.unit} · "
+                f"Balance {b.balance:+,.0f} {b.unit}", bal_st))
+            bd_rows = [[k, "not modelled" if v is None else f"{v:+,.1f} {b.unit}"]
+                       for k, v in b.breakdown.items()]
+            if bd_rows:
+                bd = Table(bd_rows, colWidths=[W * 0.55, W * 0.35])
+                bd.setStyle(TableStyle([
+                    ("FONT", (0, 0), (-1, -1), "Helvetica", 8.5),
+                    ("TEXTCOLOR", (0, 0), (-1, -1), ink),
+                    ("ROWBACKGROUNDS", (0, 0), (-1, -1), [colors.white, light]),
+                    ("ALIGN", (1, 0), (-1, -1), "RIGHT"),
+                    ("LEFTPADDING", (0, 0), (0, -1), 8),
+                    ("TOPPADDING", (0, 0), (-1, -1), 2),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 2)]))
+                story.append(bd)
+            if not b.feasible:
+                warn_st = ParagraphStyle(f"feas_warn_{b.resource}",
+                                          fontName="Helvetica-Bold", fontSize=10.5,
+                                          textColor=red_c,
+                                          backColor=colors.HexColor("#FBE9E7"),
+                                          borderPadding=6, borderRadius=4,
+                                          spaceBefore=6, spaceAfter=6)
+                resource_upper = b.resource.upper()
+                story.append(Paragraph(
+                    f"⚠ {resource_upper} DEFICIT — demand {b.demand:,.0f} "
+                    f"{b.unit} &gt; supply {b.supply:,.0f} {b.unit}, "
+                    f"shortfall {b.shortfall:,.0f} {b.unit}.", warn_st))
 
     # results table with basis column
     story.append(Paragraph("Results", sec))

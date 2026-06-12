@@ -234,52 +234,68 @@ def test_xlsx_not_converged_shows_warning_cell(tmp_path):
     assert "unverified"  in joined,    "result row Basis should be 'unverified'"
 
 
-def test_xlsx_deficit_shows_warning_and_flags_kpis(engine, hooks, tmp_path):
-    """gpu_it_kW=10000 forces a ~2600 kW deficit. Excel must carry the
-    POWER DEFICIT warning, the Power balance band, the assumption line,
-    and every Basis cell flipped to 'unverified' — even though the solve
-    converges (feasibility independently flags KPIs)."""
+def _xlsx_cells(path):
     from openpyxl import load_workbook
+    ws = load_workbook(path).active
+    cells = []
+    for row in ws.iter_rows(values_only=True):
+        cells.extend(str(c) for c in row if c is not None)
+    return "\n".join(cells)
+
+
+def test_xlsx_high_gpu_load_shows_both_deficits(engine, hooks, tmp_path):
+    """gpu_it_kW=10000 → both resource balances fail. Excel must carry
+    both POWER DEFICIT and COOLING CAPACITY DEFICIT warnings, both bands,
+    every aux line, and unverified Basis cells. Convergence still green."""
     v = engine.defaults(); v["gpu_it_kW"] = 10000.0
     r = engine.solve(v)
-    assert r["solved"].convergence.converged       # convergence still OK
-    assert not r["feasibility"].feasible           # feasibility flips
+    assert r["solved"].convergence.converged
+    assert not r["feasibility"].feasible
 
     p = tmp_path / "deficit.xlsx"
     build_excel(engine, v, r, str(p))
-    ws = load_workbook(p).active
-    cells = []
-    for row in ws.iter_rows(values_only=True):
-        cells.extend(str(c) for c in row if c is not None)
-    joined = "\n".join(cells)
-    assert "POWER DEFICIT"   in joined, "deficit warning missing from Excel"
-    assert "Power balance"   in joined, "Power balance band missing"
-    assert "Assumption"      in joined, "assumption line missing"
-    assert "GT-powered"      in joined, "assumption text missing"
-    assert "unverified"      in joined, "KPI Basis cells should be flagged"
-    # Every itemised aux line must appear in the breakdown.
+    joined = _xlsx_cells(p)
+
+    assert "POWER DEFICIT"             in joined
+    assert "COOLING CAPACITY DEFICIT"  in joined
+    assert "Power balance"             in joined
+    assert "Cooling capacity balance"  in joined
+    assert "Assumption"                in joined
+    assert "GT-powered"                in joined
+    assert "immersion"                 in joined.lower()
+    assert "unverified"                in joined
     for line in ("LiBr pump electrical",
                  "Cooling tower fan electrical",
                  "GT auxiliaries",
-                 "Plant BoP"):
-        assert line in joined, f"breakdown line {line!r} missing from Excel"
-    # Convergence still reads green — two separate truths.
+                 "Plant BoP",
+                 "LiBr cooling capacity",
+                 "GPU heat load"):
+        assert line in joined, f"line {line!r} missing"
     assert "no recycle loops" in joined
 
 
-def test_xlsx_feasible_default_no_deficit_warning(engine, vals, solved, tmp_path):
-    """Defaults are feasible; the Power balance band exists but no
-    POWER DEFICIT warning."""
-    from openpyxl import load_workbook
-    p = tmp_path / "feasible.xlsx"
+def test_xlsx_defaults_show_cooling_deficit(engine, vals, solved, tmp_path):
+    """Default GT v2 reveals an undersized LiBr (1660 kW cooling short of
+    5 MW GPU load). Power is fine; cooling fails alone. KPIs flagged."""
+    p = tmp_path / "default_cooling_deficit.xlsx"
     build_excel(engine, vals, solved, str(p))
-    ws = load_workbook(p).active
-    cells = []
-    for row in ws.iter_rows(values_only=True):
-        cells.extend(str(c) for c in row if c is not None)
-    joined = "\n".join(cells)
-    assert "Power balance" in joined
-    assert "POWER DEFICIT" not in joined
+    joined = _xlsx_cells(p)
+    assert "COOLING CAPACITY DEFICIT"  in joined
+    assert "POWER DEFICIT" not in joined           # power is fine at defaults
+    assert "unverified"    in joined               # cooling failure flags KPIs
+
+
+def test_xlsx_balanced_design_no_deficits(engine, tmp_path):
+    """libr_frac=0.85 sends most steam to the chiller → both balances OK."""
+    v = engine.defaults(); v["libr_frac"] = 0.85
+    r = engine.solve(v)
+    p = tmp_path / "balanced.xlsx"
+    build_excel(engine, v, r, str(p))
+    joined = _xlsx_cells(p)
+    assert "Power balance"            in joined
+    assert "Cooling capacity balance" in joined
+    assert "POWER DEFICIT"            not in joined
+    assert "COOLING CAPACITY DEFICIT" not in joined
 
 
 def test_xlsx_converged_no_warning(engine, vals, solved, tmp_path):
