@@ -3,7 +3,28 @@
     "allow": [
       "Bash(git -C /Users/dvdj/EngineTools add .gitignore)",
       "Bash(git -C /Users/dvdj/EngineTools add .)",
-      "Bash(git -C /Users/dvdj/EngineTools status)"
+      "Bash(git -C /Users/dvdj/EngineTools status)",
+      "Bash(git -C /Users/dvdj/EngineTools commit -m ' *)",
+      "Bash(git -C /Users/dvdj/EngineTools log --oneline -1)",
+      "Bash(python -m pytest tests/test_svg.py -v)",
+      "Bash(python *)",
+      "Bash(git *)",
+      "Bash(lsof -nP -iTCP:8050 -sTCP:LISTEN)",
+      "Bash(echo \"exit=$?\")",
+      "Bash(./start.sh *)",
+      "Bash(./restart.sh *)",
+      "Bash(/opt/anaconda3/bin/python3 *)",
+      "Bash(curl -sS http://127.0.0.1:8050/_dash-layout)",
+      "Bash(curl -sS -o /dev/null -w \"deps status=%{http_code}\\\\n\" http://127.0.0.1:8050/_dash-dependencies)",
+      "Bash(curl -sS -o /tmp/doc_preview.html -w \"status=%{http_code}  bytes=%{size_download}\\\\n\" http://127.0.0.1:8050/docs/NEXA_SIMULATOR.md)",
+      "Read(//tmp/**)",
+      "Bash(curl -sS -o /dev/null -w \"404 test for missing.md: %{http_code}\\\\n\" http://127.0.0.1:8050/docs/missing.md)",
+      "Bash(curl -sS -o /dev/null -w \"404 test for path traversal: %{http_code}\\\\n\" \"http://127.0.0.1:8050/docs/../setup.py\")",
+      "Bash(curl -sS http://127.0.0.1:8050/docs/missing.md)",
+      "Bash(curl -sS --path-as-is -o /dev/null -w \"raw path traversal: %{http_code}\\\\n\" \"http://127.0.0.1:8050/docs/../setup.py\")",
+      "Bash(curl *)",
+      "Bash(grep -v \"\\\\.pyc$\")",
+      "Bash(./stop.sh)"
     ]
   }
 }
