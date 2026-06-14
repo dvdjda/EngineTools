@@ -17,7 +17,8 @@ When you load the page, the layout is two columns:
 
 **Left column** — inputs panel:
 - **System dropdown** at the top. Pick which engine to run. Defaults to the v2 trusted GT system.
-- **Input list** below. Auto-generated from the picked engine's `InputSpec` list. Plain inputs are numeric boxes; categorical inputs (like the new mode switches) are dropdowns.
+- **Datasets panel** below the dropdown. Save / Update / Load / Delete named snapshots of all the current inputs, per engine. See §6.
+- **Input list** below. Auto-generated from the picked engine's `InputSpec` list. Plain inputs are numeric boxes; categorical inputs (like the mode switches) are dropdowns. For the GT engines a **GT load (kW)** field sits directly under **GT load (%)**, twinned to it (see §3.1).
 - **Run button** at the bottom of the panel.
 
 **Right column** — results pane (everything updates on Run):
@@ -45,6 +46,18 @@ When you load the page, the layout is two columns:
    - Audit card must be green (39 block checks + 5 composition checks in island/auto mode).
 5. **Drive a study** if you want to learn the system's dynamics — sensitivity (multi-select inputs and KPIs), sweep (1D or 2D), or scenarios. See §5.
 6. **Download a report** (PDF / Excel) when you have something to share. Tick "Include latest study" to attach the most recent study chart to the report.
+
+### 3.1 The GT load %↔kW twin (GT engines)
+
+The two GT engines (`gt_system_v2`, `gt_system_v2_loadsweep`) show a **GT load (kW)** field directly under **GT load (%)**. The two are linked both ways:
+
+- Edit **%** → the kW field updates.
+- Edit **kW** → the % field updates.
+- Edit **GT rated power** or **Ambient temperature** → the kW re-derives at the held %.
+
+The conversion is on the **actual-power (derated) basis**: `kW = derated capacity × load% ÷ 100`, where `derated = rated power × max(0.50, 1 − 0.007·max(0, T_amb − 15 °C))` — the same ambient-derating law the GasTurbine block uses ([`NEXA_SIMULATOR.md`](NEXA_SIMULATOR.md) §3.1). So the kW shown equals the **GT actual power** the engine reports when GT power control is **Manual**. If you type a kW that implies a load outside the 10–100 % envelope, the % clamps and the kW snaps back to the consistent value.
+
+Note: in **Auto** GT power mode the controller derives `load_pct` itself, so both the % input and this kW twin are inert at solve time (the actual operating point appears in the results as `GT load_pct (auto-derived)`).
 
 ## 4. Reading the status cards
 
@@ -133,7 +146,27 @@ Each study run gets stashed per-engine (in-memory dict + disk pickle under `~/.e
 
 The "Latest study: ..." status line shows what's currently loaded.
 
-## 6. Downloads
+## 6. Input datasets — Save / Load / Update / Delete
+
+The **Datasets** panel in the left column (between the System dropdown and the input list) saves and restores named snapshots of **all** the current engine's inputs. Datasets are stored **per engine** on disk under `~/.enginetools/defaults/<engine_key>.json`, so they persist across app restarts and only appear for the engine they belong to.
+
+The panel has a **dataset dropdown**, a **name** text box, and four buttons:
+
+| Button | What it does |
+|---|---|
+| **💾 Save** | Writes the current inputs as a new dataset under the name typed in the box (overwrites if that name already exists), then selects it in the dropdown. |
+| **↻ Update** | Overwrites the dataset currently selected in the dropdown with the current inputs. |
+| **📂 Load** | Pushes the selected dataset back into every input field, including the mode dropdowns. |
+| **🗑 Delete** | Removes the selected dataset. |
+
+A status line under the buttons confirms each action (e.g. "Saved dataset 'summer peak'.") or prompts you (e.g. "Select a dataset first, then Update.").
+
+Notes:
+- The dropdown repopulates when you switch engines, so you only ever see datasets for the engine in front of you.
+- The **GT load (kW)** twin (§3.1) is a view of `load_pct`, not an input, so it isn't stored — but `load_pct` is, and the kW field re-derives automatically on Load.
+- A dataset saved before a new input existed still loads fine; any input the dataset doesn't name simply keeps its current value.
+
+## 7. Downloads
 
 | Format | What's in it |
 |---|---|
@@ -142,7 +175,7 @@ The "Latest study: ..." status line shows what's currently loaded.
 
 Both honour the basis colours from the Results table. Both fail loud — neither will silently emit a "verified" basis when audit/feasibility/convergence haven't actually run and passed.
 
-## 7. Troubleshooting
+## 8. Troubleshooting
 
 - **Port 8050 already in use** → `./stop.sh` first; check `enginetools.pid` for a stale PID file.
 - **"This engine doesn't expose study_hooks"** in the banner → the picked engine is a v1 entry without the v2 hook. Switch to the v2 GT entry.

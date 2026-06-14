@@ -256,6 +256,8 @@ The v2 GT engine has four operating-mode inputs. Defaults are island / auto / au
 - **Auto**: controller picks `load_pct` from demand. Island: `min(elec_required, 100)`. Grid: `min(max(elec_required, steam_required), 100)`.
 - **Manual**: user's `load_pct` input is used directly. The controller-derived line in the results table disappears.
 
+The UI also offers a **GT load (kW)** field twinned to `load_pct` (kW = derated capacity × load% ÷ 100, the actual-power basis). It's a convenience mirror, not a separate input: in Manual it equals `GT actual power`; in Auto it's inert like `load_pct`. See [`MANUAL.md`](MANUAL.md) §3.1.
+
 ### 4.3 Steam split control — Auto (LiBr-priority) / Manual
 
 - **Auto**: `libr_frac = min(steam_to_libr_needed / total_steam_at_load, 1.0)`. LiBr claims exactly what it needs to cover GPU heat. MED takes the residual.
@@ -426,7 +428,8 @@ The exact same layout is on the Excel "Study" sheet whether it came from `study_
 | GT composition audit | `simulators/gt_system/audit.py` | `gt_system_audit_checks(solved)` |
 | v2 engine adapter | `nexa_toolkit/engines/gt_system_v2.py` | `GTSystemV2`, `_params_from(v)` |
 | Reporting pipeline | `nexa_toolkit/reporting/generic_report.py` | `build_pdf`, `build_excel`, `write_study_sheet`, `_result_rows` |
-| Dash UI | `nexa_toolkit/app/app.py` | `input_fields`, `results_table`, `convergence_card`, `feasibility_card`, `audit_card` |
+| Dash UI | `nexa_toolkit/app/app.py` | `input_fields`, `results_table`, `convergence_card`, `feasibility_card`, `audit_card`, `datasets_panel`, `_sync_gt_load` |
+| Input datasets (Save/Load/Update/Delete) | `nexa_toolkit/framework/datasets.py` | `save_dataset`, `get_dataset`, `delete_dataset`, `list_datasets` |
 
 ---
 

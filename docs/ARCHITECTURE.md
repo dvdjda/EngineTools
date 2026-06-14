@@ -24,11 +24,11 @@ EngineTools/
 │       ├── feasibility.py ← Power + cooling resource balances.
 │       └── audit.py     ← Composition-level audit checks (E9, F1–F5).
 ├── nexa_toolkit/        ← v1 UI host framework — Dash app + reports + drafts.
-│   ├── framework/       ← Engine contract, InputSpec, OutputSpec, builder.
+│   ├── framework/       ← Engine contract, InputSpec, OutputSpec, builder, datasets.
 │   ├── engines/         ← Engine adapters (gt_system_v2, gpu_cassette, ...).
 │   ├── reporting/       ← PDF, Excel, chart, study_export.
 │   └── app/             ← The Dash UI (app.py).
-└── tests/               ← 164 tests across the whole stack.
+└── tests/               ← 172 tests across the whole stack.
 ```
 
 **Why two packages?** The v1 `nexa_toolkit` predates the v2 framework. It hosts the UI, the reporting layer, the drafts directory (where Cody scaffolds new tools), and the old standalone engines. The v2 `nexablock` is the "real" engineering framework — blocks, system composition, solver, audit. The v2 engines (`gt_system_v2`, `gt_system_v2_loadsweep`) live in `nexa_toolkit/engines/` and **adapt** the v2 framework to the v1 `Engine` contract so the v1 UI can drive it.
@@ -332,5 +332,6 @@ def my_system_audit_checks(solved) -> list:
 - `tests/test_studies.py` — Sweep + sensitivity + scenarios + chart helpers.
 - `tests/test_reports.py` — PDF/Excel render + study attachment + cell content.
 - `tests/test_audit.py`, `tests/test_studies.py` — Updated for the screening-tolerance concept on cooling and M7.
+- `tests/test_datasets.py` — The named-input-dataset store: save/update/delete/load, sorting, per-engine isolation, on-disk persistence, corrupt-file tolerance, filename-safety.
 
-Run all with `python -m pytest tests/ -q`. Current count: **164 / 164 green**. v2 promotion stays 14 / 14 ±2 % across every refactor.
+Run all with `python -m pytest tests/ -q`. Current count: **172 / 172 green**. v2 promotion stays 14 / 14 ±2 % across every refactor.

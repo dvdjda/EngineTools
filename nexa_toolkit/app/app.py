@@ -23,6 +23,7 @@ from dash import dcc, html, Input, Output, State, ALL, MATCH, ctx, no_update
 import nexa_toolkit.engines  # noqa: F401  (registers the systems)
 from nexa_toolkit.framework import list_engines, get, REGISTRY
 from nexa_toolkit.framework.builder import save_request, scaffold_tool, _slug, load_kinds, add_kind
+from nexa_toolkit.framework import datasets as _datasets
 from nexa_toolkit.reporting.generic_report import (
     build_chart, build_excel, build_pdf, build_pptx)
 from nexa_toolkit.reporting.study_export import study_to_csv, study_to_xlsx
@@ -77,7 +78,11 @@ AI_MODEL_DEFAULT = "claude-sonnet-4-6"
 CARD = {"background": "white", "border": f"1px solid {LINE}", "borderRadius": "10px",
         "padding": "18px 20px", "boxShadow": "0 1px 3px rgba(20,40,80,0.06)"}
 
-app = dash.Dash(__name__, title="EngineTools")
+# suppress_callback_exceptions: the inputs panel (#inputs) is rebuilt per engine,
+# so components like the GT-load-kW twin only exist for some engines. Relax the
+# initial-layout validation so callbacks referencing them don't error when an
+# engine without them is selected.
+app = dash.Dash(__name__, title="EngineTools", suppress_callback_exceptions=True)
 server = app.server
 
 
@@ -167,8 +172,60 @@ _INPUT_STYLE = {"width": "100%", "padding": "8px 10px", "border": f"1px solid {L
                 "borderRadius": "6px", "fontSize": "14px", "boxSizing": "border-box"}
 
 
+def _dataset_options(engine_key):
+    """Dropdown options for the datasets saved under this engine."""
+    return [{"label": n, "value": n} for n in _datasets.list_datasets(engine_key)]
+
+
+def _dataset_sysin_values(ids, dataset):
+    """Ordered list of values to push into the `sysin` number inputs, aligned to
+    `ids` (the ALL-pattern id list). Keys absent from the dataset stay put
+    (`no_update`) so a dataset saved before a new input was added still loads."""
+    return [dataset[cid["key"]] if cid["key"] in dataset else no_update
+            for cid in ids]
+
+
+def _dataset_mat_values(mat_ids, dataset, engine):
+    """Ordered values for the `sysin-mat` dropdowns (choice inputs only) so the
+    visible selector reflects a loaded dataset. A value that matches one of the
+    input's choices selects it; anything else shows the Custom… box."""
+    choices_by_key = {s.key: (s.choices or {}) for s in engine.inputs if s.choices}
+    out = []
+    for cid in mat_ids:
+        k = cid["key"]
+        if k not in dataset:
+            out.append(no_update); continue
+        val = dataset[k]
+        ch = choices_by_key.get(k, {})
+        try:
+            matches = any(abs(float(cv) - float(val)) < 1e-9 for cv in ch.values())
+        except (TypeError, ValueError):
+            matches = False
+        out.append(val if matches else "__custom__")
+    return out
+
+
+def _gt_derated_kW(p_rated_kW, t_ambient_C):
+    """Ambient-derated GT capacity in kW — same law as nexablock GasTurbine:
+    derate = max(0.50, 1 − 0.007·max(0, T_amb−15°C)). Used to convert between
+    the 'GT load (%)' and 'GT load (kW)' twin fields (kW = derated × load%)."""
+    derate = max(0.50, 1.0 - 0.007 * max(0.0, float(t_ambient_C) - 15.0))
+    return float(p_rated_kW) * derate
+
+
+# Engines that expose all three of these get the linked GT-load %↔kW twin field.
+_GT_LOAD_LINK_KEYS = ("load_pct", "p_rated_kW", "t_ambient_C")
+
+
+def _has_gt_load_link(engine):
+    keys = {s.key for s in engine.inputs}
+    return all(k in keys for k in _GT_LOAD_LINK_KEYS)
+
+
 def input_fields(engine):
     out = []
+    linked_load = _has_gt_load_link(engine)
+    d = engine.defaults()
     for s in engine.inputs:
         # Skip the "(unit)" suffix for dimensionless inputs so labels
         # like "Operating mode" don't read as "Operating mode  (-)".
@@ -205,6 +262,24 @@ def input_fields(engine):
                 dcc.Input(id={"type": "sysin", "key": s.key}, type="number",
                           value=s.default, style=_INPUT_STYLE),
             ], style={"marginBottom": "12px"}))
+            # GT-load twin: render "GT load (kW)" directly under "GT load (%)".
+            # Not a `sysin` — solve reads load_pct only; this is a UI convenience
+            # synced both ways by _sync_gt_load. kW = derated capacity × load%.
+            if linked_load and s.key == "load_pct":
+                kw_default = round(
+                    _gt_derated_kW(d["p_rated_kW"], d["t_ambient_C"])
+                    * float(d["load_pct"]) / 100.0, 1)
+                out.append(html.Div([
+                    html.Label("GT load  (kW)",
+                               style={"fontSize": "13px", "color": GREY,
+                                      "display": "block", "marginBottom": "4px"}),
+                    dcc.Input(id="gt-load-kw", type="number",
+                              value=kw_default, style=_INPUT_STYLE),
+                    html.Div("= derated capacity × load%  ·  re-derives with "
+                             "rated power & ambient",
+                             style={"fontSize": "11px", "color": GREY,
+                                    "fontStyle": "italic", "marginTop": "3px"}),
+                ], style={"marginBottom": "12px"}))
     return out
 
 
@@ -752,6 +827,41 @@ def _btn(label, bid, primary=False):
         "background": (TEAL if primary else "white"), "color": ("white" if primary else NAVY)})
 
 
+def _sbtn(label, bid, danger=False):
+    """Small dataset-control button — sized to fit two-per-row in the 300px panel."""
+    col = RED if danger else NAVY
+    return html.Button(label, id=bid, n_clicks=0, style={
+        "flex": "1", "padding": "6px 8px", "borderRadius": "6px",
+        "border": f"1px solid {col}", "cursor": "pointer", "fontSize": "12px",
+        "fontWeight": "600", "background": "white", "color": col})
+
+
+def datasets_panel():
+    """Save / Update / Load / Delete controls for the current engine's inputs.
+    Lives in the static left panel (always present) so its callbacks don't
+    depend on the per-engine #inputs rebuild."""
+    field = {"width": "100%", "padding": "7px 9px", "border": f"1px solid {LINE}",
+             "borderRadius": "6px", "fontSize": "12px", "boxSizing": "border-box",
+             "marginBottom": "6px"}
+    return html.Div([
+        html.Div("Datasets", style={"fontSize": "12px", "fontWeight": "700",
+                                     "color": NAVY, "marginBottom": "6px"}),
+        dcc.Dropdown(id="dataset-select", options=[], placeholder="select a dataset…",
+                     style={"fontSize": "12px", "marginBottom": "6px"}),
+        dcc.Input(id="dataset-name", type="text", placeholder="name for new dataset",
+                  style=field),
+        html.Div([_sbtn("💾 Save", "b-ds-save"),
+                  _sbtn("↻ Update", "b-ds-update")],
+                 style={"display": "flex", "gap": "6px", "marginBottom": "6px"}),
+        html.Div([_sbtn("📂 Load", "b-ds-load"),
+                  _sbtn("🗑 Delete", "b-ds-delete", danger=True)],
+                 style={"display": "flex", "gap": "6px"}),
+        html.Div(id="ds-status", style={"fontSize": "11px", "color": GREY,
+                                         "marginTop": "7px", "minHeight": "14px"}),
+    ], style={"padding": "12px", "border": f"1px solid {LINE}",
+              "borderRadius": "8px", "background": BG, "marginBottom": "16px"})
+
+
 MODAL_HIDDEN = {"display": "none"}
 MODAL_SHOWN = {"display": "flex", "position": "fixed", "top": "0", "left": "0", "width": "100%",
                "height": "100%", "background": "rgba(20,30,50,0.45)", "alignItems": "center",
@@ -799,6 +909,7 @@ app.layout = html.Div([
             html.Label("System", style={"fontSize": "13px", "color": GREY, "fontWeight": "600"}),
             dcc.Dropdown(id="system", clearable=False, options=build_options(),
                          value="gt_system_v2", style={"marginBottom": "16px", "marginTop": "6px"}),
+            datasets_panel(),
             html.Div(id="inputs"),
             _btn("Run", "run", primary=True),
         ], style={**CARD, "width": "300px", "alignSelf": "flex-start"}),
@@ -1033,6 +1144,135 @@ def _material_select(mat_val):
     if mat_val == "__custom__":
         return no_update, visible
     return float(mat_val), hidden
+
+
+def _gt_load_sync(from_kw, pct, kw, p_rated, t_amb):
+    """Pure core of the GT-load %↔kW link — returns (pct_out, kw_out) where
+    each is either a number to write or `no_update` to leave alone.
+
+    kW = derated capacity × load%, derated = p_rated × derate(T_amb).
+    `from_kw` is True when the kW field is what the user just edited; otherwise
+    the % is the source of truth (covers editing %, rated power, or ambient).
+    Epsilon guards make the set→re-fire round-trip a no-op so it can't loop."""
+    if p_rated is None or t_amb is None:
+        return no_update, no_update
+    derated = _gt_derated_kW(p_rated, t_amb)
+    if derated <= 0:
+        return no_update, no_update
+    PCT_MIN, PCT_MAX = 10.0, 100.0
+
+    if from_kw:
+        if kw is None:
+            return no_update, no_update
+        pct_raw = float(kw) / derated * 100.0
+        pct_new = min(PCT_MAX, max(PCT_MIN, pct_raw))
+        # If we clamped (kW outside the 10–100% envelope), push the consistent
+        # kW back so the two fields agree.
+        kw_out = (round(derated * pct_new / 100.0, 1)
+                  if abs(pct_new - pct_raw) > 1e-6 else no_update)
+        if pct is not None and abs(float(pct) - pct_new) < 1e-3:
+            return no_update, kw_out
+        return round(pct_new, 2), kw_out
+
+    # % is the source of truth (% / rated power / ambient changed) → recompute kW.
+    if pct is None:
+        return no_update, no_update
+    kw_new = round(derated * float(pct) / 100.0, 1)
+    if kw is not None and abs(float(kw) - kw_new) < 0.5:
+        return no_update, no_update
+    return no_update, kw_new
+
+
+@app.callback(
+    Output({"type": "sysin", "key": "load_pct"}, "value", allow_duplicate=True),
+    Output("gt-load-kw", "value", allow_duplicate=True),
+    Input({"type": "sysin", "key": "load_pct"},    "value"),
+    Input("gt-load-kw",                            "value"),
+    Input({"type": "sysin", "key": "p_rated_kW"},  "value"),
+    Input({"type": "sysin", "key": "t_ambient_C"}, "value"),
+    prevent_initial_call=True)
+def _sync_gt_load(pct, kw, p_rated, t_amb):
+    """Two-way link between 'GT load (%)' and 'GT load (kW)'. Whichever field
+    the user edits drives the other; editing rated power or ambient re-derives
+    the kW at the current %. Logic lives in _gt_load_sync (unit-tested)."""
+    return _gt_load_sync(ctx.triggered_id == "gt-load-kw", pct, kw, p_rated, t_amb)
+
+
+# ── Datasets: Save / Update / Delete (+ refresh) and Load ─────────────────────
+
+@app.callback(
+    Output("dataset-select", "options"),
+    Output("dataset-select", "value"),
+    Output("ds-status", "children"),
+    Input("b-ds-save",   "n_clicks"),
+    Input("b-ds-update", "n_clicks"),
+    Input("b-ds-delete", "n_clicks"),
+    Input("system",      "value"),
+    State("dataset-name",   "value"),
+    State("dataset-select", "value"),
+    State({"type": "sysin", "key": ALL}, "value"),
+    State({"type": "sysin", "key": ALL}, "id"))
+def _manage_datasets(_s, _u, _d, engine_key, new_name, selected, values, ids):
+    """Save (named), Update (overwrite selected), Delete (selected). Also
+    refreshes the dataset list when the engine changes. Loading is separate
+    (_load_dataset) because it writes into the input fields."""
+    trig = ctx.triggered_id
+    opts = _dataset_options(engine_key)
+
+    # Engine changed / first load → just (re)populate the list, clear selection.
+    if trig in (None, "system"):
+        return opts, None, ""
+
+    cur = {i["key"]: v for i, v in zip(ids, values)} if ids else {}
+
+    if trig == "b-ds-save":
+        name = (new_name or "").strip()
+        if not name:
+            return opts, selected, "Enter a name to save a dataset."
+        existed = _datasets.exists(engine_key, name)
+        _datasets.save_dataset(engine_key, name, cur)
+        verb = "Overwrote" if existed else "Saved"
+        return _dataset_options(engine_key), name, f"{verb} dataset '{name}'."
+
+    if trig == "b-ds-update":
+        if not selected:
+            return opts, selected, "Select a dataset first, then Update."
+        _datasets.save_dataset(engine_key, selected, cur)
+        return _dataset_options(engine_key), selected, f"Updated dataset '{selected}'."
+
+    if trig == "b-ds-delete":
+        if not selected:
+            return opts, selected, "Select a dataset first, then Delete."
+        _datasets.delete_dataset(engine_key, selected)
+        return _dataset_options(engine_key), None, f"Deleted dataset '{selected}'."
+
+    return opts, selected, ""
+
+
+@app.callback(
+    Output({"type": "sysin",     "key": ALL}, "value", allow_duplicate=True),
+    Output({"type": "sysin-mat", "key": ALL}, "value", allow_duplicate=True),
+    Output("ds-status", "children", allow_duplicate=True),
+    Input("b-ds-load", "n_clicks"),
+    State("dataset-select", "value"),
+    State("system",         "value"),
+    State({"type": "sysin",     "key": ALL}, "id"),
+    State({"type": "sysin-mat", "key": ALL}, "id"),
+    prevent_initial_call=True)
+def _load_dataset(_n, selected, engine_key, sysin_ids, mat_ids):
+    """Push a saved dataset back into every input. Sets the `sysin` number
+    inputs (what solve reads) plus the `sysin-mat` selectors (so mode dropdowns
+    show the right option). The GT-load kW twin re-derives via _sync_gt_load."""
+    noop = ([no_update] * len(sysin_ids), [no_update] * len(mat_ids))
+    if not selected:
+        return (*noop, "Select a dataset to load.")
+    ds = _datasets.get_dataset(engine_key, selected)
+    if ds is None:
+        return (*noop, f"Dataset '{selected}' not found.")
+    engine = get(engine_key)
+    return (_dataset_sysin_values(sysin_ids, ds),
+            _dataset_mat_values(mat_ids, ds, engine),
+            f"Loaded dataset '{selected}'.")
 
 
 @app.callback(

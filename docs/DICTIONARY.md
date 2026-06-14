@@ -36,6 +36,8 @@ Alphabetical reference for every term used across the codebase, reports, and UI.
 
 **COP — Coefficient of Performance** — For the LiBr chiller, `COP = Q_cool / Q_gen`. Single-effect range 0.5–0.85 (audit check P4 enforces (0.5, 1.3)). Default 0.7.
 
+**Dataset (input dataset / "default")** — A named snapshot of all of an engine's input values, saved from the UI's Datasets panel (Save / Update / Load / Delete). Stored per-engine on disk at `~/.enginetools/defaults/<engine_key>.json`, so datasets persist across restarts and only show for the engine they belong to. Implemented in `nexa_toolkit/framework/datasets.py`.
+
 **Derate / derated capacity** — Ambient-corrected GT maximum power. `derate = max(0.50, 1 − 0.007 × max(0, T_amb − 15°C))`. The 0.7 %/°C above ISO 15°C is conservative-screening for typical industrial turbines. The **power balance supply** uses derated capacity (the available envelope), not actual operating power.
 
 **Derived value** — A computed setpoint in auto mode (`load_pct (auto-derived)`, `libr_frac (auto-derived)`). Surfaced in the outputs table with that label so the user can see what the controller picked.
@@ -57,6 +59,8 @@ Alphabetical reference for every term used across the codebase, reports, and UI.
 **GOR — Gain Output Ratio** — MED screening rule: `GOR ≈ 0.8 × n_effects`. Distillate per kg of steam input. Audit checks M5 / P5 keep it in the (4, 10) range; values outside this are non-physical for thin-film falling-film MED.
 
 **Grid export** — In grid-tied mode, the auto-computed surplus electrical = `max(0, GT actual power − NEXA demand)`. Export-only — grid imports are forbidden per the NEXA specification. F5 audit check enforces ≥ 0.
+
+**GT load (kW)** — A UI field on the GT engines, shown under **GT load (%)** and twinned to it both ways: `kW = derated capacity × load% ÷ 100` (actual-power basis), where `derated = rated power × max(0.50, 1 − 0.007·max(0, T_amb − 15 °C))`. Editing %, kW, rated power, or ambient keeps the pair consistent. It mirrors `load_pct` — not a separate input — so it equals **GT actual power** in manual GT-power mode and is inert in auto mode. See [`MANUAL.md`](MANUAL.md) §3.1.
 
 **`gt_system_v2`** — The v2 trusted GT system engine. Drop-in replacement for the v1 trusted GT tool, validated within ±2 % across 14 reference KPIs (`tests/test_gt_system.py`). Default selection in the system dropdown.
 
