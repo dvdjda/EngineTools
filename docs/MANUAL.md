@@ -11,6 +11,22 @@ tail -f enginetools.log  # if it doesn't come up, the log is here
 
 The app binds to `http://127.0.0.1:8050/`. Defaults to Anaconda Python (`/opt/anaconda3/bin/python3`) and requires `dash`, `CoolProp`, `scipy`, `matplotlib`, `reportlab`, `openpyxl`, `python-pptx`, `cairosvg`, and `pandas`. See the project root `nexa_toolkit/README.md` for the install line.
 
+### 1.1 Auto-start on login (macOS LaunchAgent)
+
+On this Mac the app auto-starts at login via a user LaunchAgent, `com.nexa.enginetools`, at `~/Library/LaunchAgents/com.nexa.enginetools.plist`. It runs `run.sh` from this repo (`/Users/dvdj/EngineTools`) and logs to `/tmp/enginetools.log`.
+
+`run.sh` is the launcher and serves both contexts: run from a terminal it **self-detaches** into the background; when the LaunchAgent runs it (with `_ET_BG=1` set in the plist) it runs the app in the **foreground** so `launchd` can supervise it (`KeepAlive` restarts it if it exits, `RunAtLoad` starts it at login).
+
+Control the service with `launchctl` (`U=$(id -u)`):
+
+```bash
+launchctl kickstart -k gui/$U/com.nexa.enginetools                       # restart now
+launchctl bootout   gui/$U/com.nexa.enginetools                          # stop now
+launchctl bootstrap gui/$U ~/Library/LaunchAgents/com.nexa.enginetools.plist  # start now
+```
+
+To disable auto-start entirely, `bootout` it and move the plist out of `~/Library/LaunchAgents/`. The repo's `./start.sh` / `./stop.sh` remain available for manual control independent of the LaunchAgent (just don't run both at once — they share port 8050).
+
 ## 2. The UI layout, top to bottom
 
 When you load the page, the layout is two columns:

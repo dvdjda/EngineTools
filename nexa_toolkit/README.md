@@ -43,5 +43,5 @@ python make_systems.py        # reports for every registered system -> ./systems
 
 ## Next
 - Generic UI (Dash): auto-renders inputs + results from the registry, report downloads.
-- MCP server: each engine exposed as a tool/skill so OpenClaw/Cody calls it (no host shell).
+- MCP server: each engine exposed as a tool/skill so an agent (Cody) calls it (no host shell).
 - More systems: desalination absorption, gas turbine generator, whole-plant simulator.

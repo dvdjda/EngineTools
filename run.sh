@@ -3,8 +3,9 @@
 # Frees the terminal immediately; app runs in background.
 # Log: /tmp/enginetools.log
 
-_SCRIPT="/Users/dvdj/.openclaw/workspace/EngineTools/run.sh"
-_APPDIR="/Users/dvdj/.openclaw/workspace/EngineTools"
+_SCRIPT="/Users/dvdj/EngineTools/run.sh"
+_APPDIR="/Users/dvdj/EngineTools"
+_PY="/opt/anaconda3/bin/python3"          # Anaconda Python — has CoolProp + all deps
 _ZSH="${SHELL:-/bin/zsh}"
 
 # --- self-detach on first call ---
@@ -47,5 +48,5 @@ sleep 1
 # open browser tab once the app is serving
 ( until nc -z 127.0.0.1 8050 2>/dev/null; do sleep 0.5; done; open "http://127.0.0.1:8050" ) &
 
-PYTHONPATH="$_APPDIR" python -m nexa_toolkit.app.app
+PYTHONPATH="$_APPDIR" "$_PY" -m nexa_toolkit.app.app
 echo "=== EngineTools stopped $(date) ==="
