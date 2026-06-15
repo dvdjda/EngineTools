@@ -90,7 +90,11 @@ Alphabetical reference for every term used across the codebase, reports, and UI.
 
 **Plant aux** — Auxiliary electrical loads modelled at screening fidelity: MED electrical (pumps), LiBr pump electrical, CT fan electrical, GT auxiliaries, Plant BoP. Itemised in the power balance breakdown.
 
-**PUE — Power Usage Effectiveness** — Data centre metric. `PUE = (IT + overhead) / IT = 1 + aux_frac`. For immersion the v2 default is 1.05 (~5 % cassette overhead). The block's "PUE  (approx)" result row reflects this.
+**PFD page** — The Process Flow Diagram appended as the final **landscape** page of the PDF report for the GT-system engines. Redrawn natively in the report engine (`nexa_toolkit/reporting/pfd_page.py`) with every value refreshed from the current solve — block boxes, flow streams, a Key-results table, an energy-balance/audit panel, the island/grid badge + named operating-mode strip, and a stream/basis legend. The export cell is mode-aware (island → "External load"; grid-tied → "Grid export").
+
+**PUE — Power Usage Effectiveness** — Data centre metric. **Cassette PUE** is an *input* (ratio, default 1.05) that sets the cassette overhead `IT × (cassette_pue − 1)`. **Plant PUE** is the single computed *result* — see below. (The input key is `cassette_pue`; the old standalone "GPU PUE" results row that merely echoed the input was removed.)
+
+**Plant PUE (electrical, export excluded)** — The one overall plant efficiency KPI, basis `screening`: `(IT + cassette overhead + LiBr pump + CT fan + GT aux + plant BoP) / IT`. Electrical only — excludes MED electrical, external load and grid export. Guarded on IT > 0. Rolls every overhead consumption into a single figure so the report doesn't list pump/fan/cassette-PUE rows separately (those stay in the inputs).
 
 **Resource balance** — One supply / demand pair surfaced by feasibility. `ResourceBalance` carries resource name, unit, feasibility flag, supply, demand, balance, shortfall, breakdown (itemised contributors), assumption text, and screening tolerance.
 

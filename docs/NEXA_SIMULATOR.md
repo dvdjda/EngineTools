@@ -400,11 +400,12 @@ Every PDF and Excel report carries these sections, in order:
 4. **Power balance** (one band) + (island) external load OR (grid) grid export in breakdown
 5. **Cooling capacity balance** (one band)
 6. **Audit** — `N/N passed`, or a table listing every failed check (name, category, detail)
-7. **Results table** with the per-KPI basis colour
+7. **Results table** with the per-KPI basis colour — headline KPIs plus the single **Plant PUE (electrical, export excluded)** screening KPI. The granular overhead lines (Cassette PUE, pump, fan, …) are *not* results; they live in the Design point block as inputs and Plant PUE rolls them into one figure.
 8. **Chart** — flowsheet (SVG, rasterised to PNG via cairosvg for PDF/PPTX), or sweep line chart for the load-sweep adapter
 9. (Optional) **AI Analysis** narrative
 10. Method note from the engine
 11. (Optional, ticked at download) **Study** section/sheet with chart + table
+12. (PDF, GT-system engines only) **PFD page** — a final **landscape** page redrawing the process flow diagram with every value live from the run: block boxes, flow streams, a Key-results table, an energy-balance/audit panel, the island/grid badge + named operating-mode strip (Operating mode / GT power control / Steam split), a mode-aware **External load** (island) / **Grid export** (grid) cell, and a stream/basis legend. Native reportlab redraw — no PowerPoint/LibreOffice at render time (`nexa_toolkit/reporting/pfd_page.py`).
 
 The exact same layout is on the Excel "Study" sheet whether it came from `study_to_xlsx` standalone or from `build_excel(..., study=...)` — `write_study_sheet` is the one source of truth.
 
@@ -428,6 +429,7 @@ The exact same layout is on the Excel "Study" sheet whether it came from `study_
 | GT composition audit | `simulators/gt_system/audit.py` | `gt_system_audit_checks(solved)` |
 | v2 engine adapter | `nexa_toolkit/engines/gt_system_v2.py` | `GTSystemV2`, `_params_from(v)` |
 | Reporting pipeline | `nexa_toolkit/reporting/generic_report.py` | `build_pdf`, `build_excel`, `write_study_sheet`, `_result_rows` |
+| Live PFD landscape page | `nexa_toolkit/reporting/pfd_page.py` | `make_pfd_flowable`, `pfd_context`, `PFDFlowable` |
 | Dash UI | `nexa_toolkit/app/app.py` | `input_fields`, `results_table`, `convergence_card`, `feasibility_card`, `audit_card`, `datasets_panel`, `_sync_gt_load` |
 | Input datasets (Save/Load/Update/Delete) | `nexa_toolkit/framework/datasets.py` | `save_dataset`, `get_dataset`, `delete_dataset`, `list_datasets` |
 

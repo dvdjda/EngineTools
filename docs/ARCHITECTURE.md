@@ -26,9 +26,9 @@ EngineTools/
 ├── nexa_toolkit/        ← v1 UI host framework — Dash app + reports + drafts.
 │   ├── framework/       ← Engine contract, InputSpec, OutputSpec, builder, datasets.
 │   ├── engines/         ← Engine adapters (gt_system_v2, gpu_cassette, ...).
-│   ├── reporting/       ← PDF, Excel, chart, study_export.
+│   ├── reporting/       ← PDF, Excel, chart, study_export, pfd_page (landscape PFD).
 │   └── app/             ← The Dash UI (app.py).
-└── tests/               ← 172 tests across the whole stack.
+└── tests/               ← 176 tests across the whole stack.
 ```
 
 **Why two packages?** The v1 `nexa_toolkit` predates the v2 framework. It hosts the UI, the reporting layer, the drafts directory (where Cody scaffolds new tools), and the old standalone engines. The v2 `nexablock` is the "real" engineering framework — blocks, system composition, solver, audit. The v2 engines (`gt_system_v2`, `gt_system_v2_loadsweep`) live in `nexa_toolkit/engines/` and **adapt** the v2 framework to the v1 `Engine` contract so the v1 UI can drive it.
@@ -214,6 +214,8 @@ These are pure functions of the result. The Dash UI calls them; the standalone s
 
 The PDF layout is built with reportlab; the Excel layout with openpyxl. Both honour the basis colours from `_result_rows()` which read audit coverage. Both insert the **Convergence**, **Power balance**, **Cooling capacity balance**, and **Audit** sections in that order before the results table.
 
+`build_pdf` uses a `BaseDocTemplate` with two page templates — a portrait template for the body and a landscape template for the final **PFD page**. For the GT-system engines it appends `pfd_page.make_pfd_flowable(engine, values, result)` as the last page: a native reportlab redraw of the process flow diagram with every value taken live from the solve (returns `None`, so the page is skipped, for other engines). No PowerPoint/LibreOffice is involved at render time.
+
 `write_study_sheet(wb, study)` is the **single source of truth** for the "Study" sheet whether it's attached to a full report (`build_excel(..., study=...)`) or sent standalone (`study_to_xlsx(study, path)`).
 
 ---
@@ -334,4 +336,4 @@ def my_system_audit_checks(solved) -> list:
 - `tests/test_audit.py`, `tests/test_studies.py` — Updated for the screening-tolerance concept on cooling and M7.
 - `tests/test_datasets.py` — The named-input-dataset store: save/update/delete/load, sorting, per-engine isolation, on-disk persistence, corrupt-file tolerance, filename-safety.
 
-Run all with `python -m pytest tests/ -q`. Current count: **172 / 172 green**. v2 promotion stays 14 / 14 ±2 % across every refactor.
+Run all with `python -m pytest tests/ -q`. Current count: **176 / 176 green**. v2 promotion stays 14 / 14 ±2 % across every refactor.

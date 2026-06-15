@@ -139,7 +139,7 @@ def control_setpoints(p, max_iter: int = 8,
     p is a GTSystemParams. Returns ControlSetpoints with the final
     resolved values plus diagnostic context.
     """
-    gpu_heat_kW = p.gpu_it_kW * p.gpu_pue                     # immersion: all elec → heat
+    gpu_heat_kW = p.gpu_it_kW * p.cassette_pue                # immersion: all elec → heat
     t_amb_K     = p.t_ambient_C + 273.15
     derate      = max(0.50, 1.0 - 0.007 * max(0.0, t_amb_K - 288.15))
     p_derate    = p.p_rated_kW * derate

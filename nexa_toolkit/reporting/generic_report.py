@@ -468,8 +468,10 @@ def build_pdf(engine, values, result, path, chart_png, ai_text=None, study=None)
     from reportlab.lib.units import mm
     from reportlab.lib import colors
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-    from reportlab.platypus import (SimpleDocTemplate, Paragraph, Spacer, Table,
-                                    TableStyle, Image)
+    from reportlab.platypus import (BaseDocTemplate, PageTemplate, Frame,
+                                    NextPageTemplate, PageBreak,
+                                    Paragraph, Spacer, Table, TableStyle, Image)
+    from reportlab.lib.pagesizes import landscape
     from reportlab.lib.enums import TA_LEFT
     navy = colors.HexColor("#2E4E7E"); grey = colors.HexColor("#595959")
     ink = colors.HexColor("#22303F"); light = colors.HexColor("#EAF0F8")
@@ -487,9 +489,31 @@ def build_pdf(engine, values, result, path, chart_png, ai_text=None, study=None)
     basis_st = {b: ParagraphStyle(f"b{b}", fontName="Helvetica", fontSize=8, textColor=c)
                 for b, c in bcol.items()}
 
-    doc = SimpleDocTemplate(path, pagesize=A4, leftMargin=18 * mm, rightMargin=18 * mm,
-                            topMargin=16 * mm, bottomMargin=16 * mm)
-    W = doc.width
+    LAND = landscape(A4)
+
+    def _footer(canvas, d_, pw):
+        canvas.saveState()
+        canvas.setStrokeColor(navy); canvas.setLineWidth(2)
+        canvas.line(18 * mm, d_.pagesize[1] - 12 * mm, pw - 18 * mm, d_.pagesize[1] - 12 * mm)
+        canvas.setFont("Helvetica", 7.5); canvas.setFillColor(grey)
+        canvas.drawString(18 * mm, 10 * mm, "Nexa Power Investments LLC - Confidential")
+        canvas.drawRightString(pw - 18 * mm, 10 * mm, "Screening report - not for certification")
+        canvas.restoreState()
+
+    def footer_p(canvas, d_):
+        canvas.setPageSize(A4);  _footer(canvas, d_, A4[0])
+    def footer_l(canvas, d_):
+        canvas.setPageSize(LAND); _footer(canvas, d_, LAND[0])
+
+    doc = BaseDocTemplate(path, pagesize=A4, leftMargin=18 * mm, rightMargin=18 * mm,
+                          topMargin=16 * mm, bottomMargin=16 * mm)
+    fp = Frame(18 * mm, 16 * mm, A4[0] - 36 * mm, A4[1] - 32 * mm, id="portrait")
+    fl = Frame(12 * mm, 12 * mm, LAND[0] - 24 * mm, LAND[1] - 24 * mm, id="land")
+    doc.addPageTemplates([
+        PageTemplate(id="portrait", frames=[fp], pagesize=A4,   onPage=footer_p),
+        PageTemplate(id="pfd",      frames=[fl], pagesize=LAND, onPage=footer_l),
+    ])
+    W = fp.width
     story = [Paragraph(engine.name, h1),
              Paragraph("Nexa Block v1  &nbsp;|&nbsp;  screening report", sub)]
 
@@ -657,15 +681,16 @@ def build_pdf(engine, values, result, path, chart_png, ai_text=None, study=None)
                 story.append(Paragraph(body_txt, body))
                 story.append(Spacer(1, 5))
 
-    def footer(canvas, d_):
-        canvas.saveState()
-        canvas.setStrokeColor(navy); canvas.setLineWidth(2)
-        canvas.line(18 * mm, A4[1] - 12 * mm, A4[0] - 18 * mm, A4[1] - 12 * mm)
-        canvas.setFont("Helvetica", 7.5); canvas.setFillColor(grey)
-        canvas.drawString(18 * mm, 10 * mm, "Nexa Power Investments LLC - Confidential")
-        canvas.drawRightString(A4[0] - 18 * mm, 10 * mm, "Screening report - not for certification")
-        canvas.restoreState()
-    doc.build(story, onFirstPage=footer, onLaterPages=footer)
+    # ── PFD flowsheet — final landscape page (live values; GT system only) ──
+    try:
+        from nexa_toolkit.reporting.pfd_page import make_pfd_flowable
+        pfd = make_pfd_flowable(engine, values, result)
+        if pfd is not None:
+            story += [NextPageTemplate("pfd"), PageBreak(), pfd]
+    except Exception as _e:
+        story.append(Paragraph(f"<i>PFD page omitted: {_e}</i>", body))
+
+    doc.build(story)
     return path
 
 

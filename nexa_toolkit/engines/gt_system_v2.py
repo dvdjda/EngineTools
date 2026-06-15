@@ -52,7 +52,7 @@ def _params_from(v: dict) -> GTSystemParams:
         chw_sup_C    = float(v["chw_sup_C"]),
         chw_dt_K     = float(v["chw_dt_K"]),
         gpu_it_kW    = float(v["gpu_it_kW"]),
-        gpu_pue      = float(v["gpu_pue"]),
+        cassette_pue = float(v["cassette_pue"]),
         med_effects  = int(v["med_effects"]),
         sw_t_C       = float(v["sw_t_C"]),
         t_wb_C       = float(v["t_wb_C"]),
@@ -96,7 +96,7 @@ class GTSystemV2(Engine):
         InputSpec("chw_sup_C",    "CHW supply temp",        "°C",  7.0,       4,      15),
         InputSpec("chw_dt_K",     "CHW ΔT",                 "K",   6.0,       2,      15),
         InputSpec("gpu_it_kW",    "GPU IT load",            "kW",  5_000.0,   100,    200_000),
-        InputSpec("gpu_pue",      "GPU PUE",                "-",   1.05,      1.0,    2.0),
+        InputSpec("cassette_pue", "Cassette PUE",           "-",   1.05,      1.0,    2.0),
         InputSpec("med_effects",  "MED effects",            "-",   8.0,       1,      16),
         InputSpec("sw_t_C",       "Seawater temp",          "°C",  28.0,      0,      45),
         InputSpec("t_wb_C",       "Cooling tower wet-bulb", "°C",  25.0,     -5,      38),
@@ -133,34 +133,20 @@ class GTSystemV2(Engine):
 
     def outputs(self, r: dict) -> list:
         k = r["kpis"]
-        # Cassette PUE + plant-aux total drilled out so this table doubles as
-        # the NEXA-detail panel (per request).
-        gpu_pue, plant_aux_total = 1.0, 0.0
-        solved = r.get("solved")
-        if solved is not None:
-            from nexablock.blocks import (GasTurbine, GPUCassette, LiBrChiller,
-                                            MED, CoolingTower)
-            def _r(cls, label, default=0.0):
-                b = next((x for x in solved.blocks if isinstance(x, cls)), None)
-                return b.results[label].value if b and label in b.results else default
-            gpu_pue = _r(GPUCassette, "PUE  (approx)", 1.0)
-            plant_aux_total = (
-                _r(MED,           "MED electrical")
-                + _r(LiBrChiller, "LiBr pump electrical")
-                + _r(CoolingTower,"CT fan electrical")
-                + _r(GasTurbine,  "GT aux electrical")
-            )
-
+        # Headline KPIs + the single "Plant PUE" overhead summary. The separate
+        # cassette-PUE / pump / fan / plant-aux echo rows are intentionally NOT
+        # results — they just reflect inputs (the per-load fractions live in the
+        # Design point block). Plant PUE rolls them all into one figure.
         rows = [
             OutputSpec("GT actual power",       k["GT actual power kW"],   "kW",     "verified", "{:.0f}"),
             OutputSpec("NG consumption",        k["NG consumption Nm3h"],  "Nm³/h",  "verified", "{:.0f}"),
             OutputSpec("Steam generation",      k["Steam generation t/h"], "t/h",    "verified", "{:.2f}"),
             OutputSpec("LiBr cooling capacity", k["LiBr cooling kW"],      "kW",     "verified", "{:.0f}"),
             OutputSpec("GPU IT load",           k["GPU IT load kW"],       "kW",     "verified", "{:.0f}"),
-            OutputSpec("  · GPU PUE",           gpu_pue,                   "-",      "verified", "{:.3f}"),
-            OutputSpec("  · Plant aux total (pumps/fans/HVAC/lights)",
-                                                plant_aux_total,           "kW",     "verified", "{:.0f}"),
             OutputSpec("MED water production",  k["MED water m3day"],      "m³/day", "verified", "{:.0f}"),
+            OutputSpec("Plant PUE (electrical, export excluded)",
+                       k.get("Plant PUE (electrical, export excluded)", 0.0),
+                       "-", "screening", "{:.3f}"),
         ]
         # Mode / control-derived KPIs — show only when relevant.
         solved = r.get("solved")
@@ -188,10 +174,9 @@ class GTSystemV2(Engine):
     def highlights(self, r: dict) -> list:
         """Four highlight cards at the top of the results pane:
         GT actual power · Steam generation · GPU IT load · MED water production.
-        Index 5 (GPU PUE) and 6 (Plant aux total) are sub-rows of GPU IT
-        load in the Results table and intentionally not promoted to cards."""
+        Index 6 (Plant PUE) is a screening KPI and not promoted to a card."""
         outs = self.outputs(r)
-        return [outs[0], outs[2], outs[4], outs[7]]
+        return [outs[0], outs[2], outs[4], outs[5]]
 
     def chart(self, r: dict, path: str) -> str:
         with open(path, "w", encoding="utf-8") as f:

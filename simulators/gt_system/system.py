@@ -43,7 +43,7 @@ class GTSystemParams:
     chw_dt_K:     float = 6.0
     # GPU data centre
     gpu_it_kW:    float = 5_000.0
-    gpu_pue:      float = 1.05
+    cassette_pue: float = 1.05       # cassette overhead = IT × (cassette_pue − 1)
     # MED
     med_effects:  int   = 8
     sw_t_C:       float = 28.0
@@ -93,7 +93,7 @@ def build_gt_system(p: GTSystemParams) -> SolvedSystem:
 
     gpu     = sys.add(GPUCassette(
                 n_gpu=1, p_gpu_kW=p.gpu_it_kW,   # 1 virtual cassette = whole DC
-                aux_frac=p.gpu_pue - 1.0,
+                aux_frac=p.cassette_pue - 1.0,
                 coolant_cp=4187.0, coolant_rho=1000.0, dt_K=p.chw_dt_K))
 
     med     = sys.add(MED(
@@ -126,6 +126,7 @@ def build_gt_system(p: GTSystemParams) -> SolvedSystem:
     # Attach resolved control state for downstream consumers.
     solved.control = cs            # type: ignore[attr-defined]
     solved.operating_mode = p.operating_mode  # type: ignore[attr-defined]
+    solved.bop_frac = p.bop_frac   # type: ignore[attr-defined]  # for Plant PUE in summary()
     return solved
 
 
@@ -153,4 +154,18 @@ def summary(solved: SolvedSystem) -> dict[str, float]:
         kpis["Resolved libr_frac"]   = cs.libr_frac
         kpis["External load kW"]     = cs.external_load_kW
         kpis["Grid export kW"]       = cs.grid_export_kW
+
+    # Plant PUE (electrical, export excluded) — single screening KPI.
+    # Numerator: IT + cassette overhead + LiBr pump + CT fan + GT aux + plant BoP.
+    # Excludes MED electrical, external load, and grid export. Electrical only —
+    # no fuel/thermal. Guard IT > 0. No physics touched; pure post-hoc ratio.
+    it_kW        = kpis["GPU IT load kW"]
+    overhead_kW  = _get(GPUCassette, "Cassette overhead electrical") or 0.0
+    libr_pump_kW = _get(LiBrChiller, "LiBr pump electrical")         or 0.0
+    ct_fan_kW    = _get(CoolingTower, "CT fan electrical")           or 0.0
+    gt_aux_kW    = _get(GasTurbine,  "GT aux electrical")            or 0.0
+    bop_kW       = max(0.0, getattr(solved, "bop_frac", 0.010)) * kpis["GT actual power kW"]
+    kpis["Plant PUE (electrical, export excluded)"] = (
+        (it_kW + overhead_kW + libr_pump_kW + ct_fan_kW + gt_aux_kW + bop_kW) / it_kW
+        if it_kW > 0 else 0.0)
     return kpis

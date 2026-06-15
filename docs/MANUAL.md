@@ -186,7 +186,7 @@ Notes:
 
 | Format | What's in it |
 |---|---|
-| **PDF** | Title · design point table · convergence / power balance / cooling balance / audit sections · chart (flowsheet or sweep depending on engine) · results table (with basis colours) · method note · AI analysis (if any). Tick "Include latest study" to append the most recent study chart. |
+| **PDF** | Title · design point table · convergence / power balance / cooling balance / audit sections · chart (flowsheet or sweep depending on engine) · results table (with basis colours — including the single **Plant PUE** KPI) · method note · AI analysis (if any). Tick "Include latest study" to append the most recent study chart. For the GT-system engines a final **landscape PFD page** is appended — the process flow diagram with every value live from the run, an island/grid badge, the named operating modes, and a mode-aware external-load / grid-export cell. |
 | **Excel** | Sizing sheet (engine name + design point + convergence band + every resource balance + audit band + results table). With "Include latest study" ticked, an extra **Study** sheet carries the chart + the underlying table. |
 
 Both honour the basis colours from the Results table. Both fail loud — neither will silently emit a "verified" basis when audit/feasibility/convergence haven't actually run and passed.

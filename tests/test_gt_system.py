@@ -32,7 +32,7 @@ _P = GTSystemParams(
     chw_sup_C    = 7.0,
     chw_dt_K     = 6.0,
     gpu_it_kW    = 5_000.0,
-    gpu_pue      = 1.05,
+    cassette_pue = 1.05,
     med_effects  = 8,
     sw_t_C       = 28.0,
     # Pin to manual modes so the v2 promotion validation runs against the
@@ -183,6 +183,57 @@ def test_summary_keys_present(solved):
                 "GPU IT load kW", "MED water m3day"]
     for k in required:
         assert k in kpis and kpis[k] >= 0, f"Missing or negative KPI: {k}"
+
+
+# ── §8.7  PUE cleanup ─────────────────────────────────────────────────────────
+# Cassette PUE stays an INPUT (ratio). The single PUE RESULT is now the
+# electrical, export-excluded "Plant PUE". The old standalone "GPU PUE" results
+# row (which just echoed the input) is gone. Screening change — no physics.
+
+import nexa_toolkit.engines          # noqa: F401  — registers the engines
+from nexa_toolkit.framework import get
+
+
+def _v2_engine():
+    return get("gt_system_v2")
+
+
+def test_cassette_pue_is_accepted_input_key():
+    """cassette_pue is the input ratio (default 1.05); gpu_pue is gone."""
+    keys = {i.key for i in _v2_engine().inputs}
+    assert "cassette_pue" in keys, keys
+    assert "gpu_pue" not in keys, keys
+    # the dataclass also accepts it (no physics change)
+    from simulators.gt_system.system import GTSystemParams
+    assert GTSystemParams(cassette_pue=1.05).cassette_pue == 1.05
+
+
+def test_no_gpu_pue_in_outputs():
+    """The standalone 'GPU PUE' echo row must not appear in the results."""
+    eng = _v2_engine()
+    r = eng.solve(eng.defaults())
+    labels = [o.label for o in eng.outputs(r)]
+    assert not any("GPU PUE" in lbl for lbl in labels), labels
+
+
+def test_plant_pue_design_point():
+    """v2 design point (defaults = island/auto, IT 5,000 kW, cassette PUE 1.05):
+    plant_pue = (IT + cassette overhead + LiBr pump + CT fan + GT aux + plant
+    BoP) / IT ≈ 1.134 (electrical only; MED elec, external load and grid export
+    excluded)."""
+    eng = _v2_engine()
+    r = eng.solve(eng.defaults())
+    labels = [o.label for o in eng.outputs(r)]
+    assert "Plant PUE (electrical, export excluded)" in labels, labels
+    pue = r["kpis"]["Plant PUE (electrical, export excluded)"]
+    assert abs(pue - 1.134) < 0.005, f"plant_pue={pue:.4f}"
+
+
+def test_plant_pue_guards_zero_it():
+    """IT > 0 guard: a degenerate solve must not divide by zero."""
+    from simulators.gt_system.system import GTSystemParams, build_gt_system, summary
+    kpis = summary(build_gt_system(GTSystemParams(gpu_it_kW=0.0)))
+    assert kpis["Plant PUE (electrical, export excluded)"] == 0.0
 
 
 if __name__ == "__main__":
