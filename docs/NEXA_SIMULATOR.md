@@ -6,7 +6,7 @@ The single most-referenced document in the project. Open this when you want to k
 
 ## 1. The big picture in one paragraph
 
-The **GPU is the primary load**. It demands electrical power and dumps every watt of that electrical input as heat into the coolant — a single-phase **dielectric immersion fluid**, not chilled water (first law). The **Gas Turbine (GT)** follows the GPU + plant aux load: in island mode it's pinned by what the bus can absorb, in grid-tied it can ramp higher and inject the surplus to the grid (export-only — imports are forbidden). The GT's exhaust feeds a **Heat Recovery Steam Generator (HRSG)**, which makes steam at a pressure you set. **All** of that steam goes to a single **LiBr absorption chiller** — there is no steam splitter and no MED steam feed; the chiller drives the cooling for the GPU dielectric loop. The chiller's **heat rejection** leaves as a hot cooling-water loop that in turn drives a **Multi-Effect Distillation (MED)** unit (rejection-driven, not steam-driven) to make fresh water, then passes to a dry **Radiator** with forced-air fans and a 3-way bypass valve that trims the loop return to the HRSG feedwater set-point and closes the loop. A manual 3-way bypass around MED lets some rejection heat skip the desalination stage.
+The **GPU is the primary load**. It demands electrical power and dumps every watt of that electrical input as heat into the coolant — a single-phase **dielectric immersion fluid**, not chilled water (first law). The **Gas Turbine (GT)** follows the GPU + plant aux load: in island mode it's pinned by what the bus can absorb, in grid-tied it can ramp higher and inject the surplus to the grid (export-only — imports are forbidden). The GT's exhaust feeds a **Heat Recovery Steam Generator (HRSG)**, which makes steam at a pressure you set. **All** of that steam goes to a single **LiBr absorption chiller** — there is no steam splitter and no MED steam feed; the chiller drives the cooling for the GPU dielectric loop. The chiller's **heat rejection** leaves as a hot cooling-water loop that in turn drives a **Multi-Effect Distillation (MED)** unit (rejection-driven, not steam-driven) to make fresh water, then passes to a dry **Radiator** with forced-air fans and a 3-way bypass valve that trims the loop return to the HRSG feedwater set-point and closes the loop. A second 3-way bypass around MED (default **Auto**) cascades with the radiator to hold the HRSG return at set-point — it opens just enough to keep MED from over-cooling the loop below the feedwater set-point.
 
 Every solve runs three independent status layers:
 - **Convergence** — did the solver loops settle? (the GPU↔LiBr dielectric loop is a real recycle, torn and solved by Wegstein)
@@ -187,7 +187,7 @@ Multi-Effect Distillation thermal desalination, now **driven by the LiBr chiller
 
 **Ports**: Inlet **`loop_in`** (the hot LiBr-rejection water) + optional `seawater`; Outlet **`loop_out`** (cooling water continuing to the radiator) + `fresh` + `brine`.
 
-**Params**: `n_effects` (2–20 allowed), `sw_t_C`, `recovery` (default 35 %), **`bypass_frac`** (`med_bypass_frac` — the manual 3-way valve fraction routed AROUND MED), `loop_cold_C` (= `fw_t_C`, the loop cold side / HRSG return set-point).
+**Params**: `n_effects` (2–20 allowed), `sw_t_C`, `recovery` (default 35 %), **`bypass_frac`** (the 3-way valve fraction routed AROUND MED — set manually via `med_bypass_frac` or auto-resolved by the controller, see §4.3), `loop_cold_C` (the temperature MED cools the captured branch to: `fw_t_C` in manual mode, `sw_t_C + med_cold_pinch_K` in auto).
 
 **Physics (screening)**:
 ```
@@ -222,15 +222,15 @@ Q_rad = f × ṁ × cp × (T_in − T_rad)              # heat rejected to ambie
 T_out = T_set  (= f·T_rad + (1−f)·T_in)          # blended return; idles (f=0) if T_in ≤ T_set
 Fan electrical = fan_frac × Q_rad
 ```
-Note: when `med_bypass_frac = 0` (default) MED captures all the rejection and the loop reaches MED's cold side (`fw_t_C`) before the radiator, so the radiator idles (`f = 0`, duty 0). Raising the MED bypass sends hotter water to the radiator, which then trims it back to the set-point.
+Note: with the default **Auto** MED bypass (§4.3) the bypass valve already blends the loop back to the set-point `fw_t_C`, so the radiator idles (`f = 0`, duty 0) at the balance point. In **Manual** mode, `med_bypass_frac = 0` likewise sends the loop to the radiator at the set-point (idle); raising the manual bypass sends hotter water to the radiator, which then trims it back to the set-point.
 
 **Audit checks**: T5 (radiator branch > ambient, i.e. approach > 0), T5b (return ≥ radiator branch — can't blend below the cold side), P14 (3-way split in [0, 100] %).
 
 ---
 
-## 4. Control modes — two switches, one external-load knob
+## 4. Control modes — three switches, one external-load knob
 
-The v2 GT engine has two mode switches (`operating_mode`, `gt_power_mode`) and the `external_load_kW` scalar. Defaults are island / auto / 0 kW — the "real-plant" semantics. There is no longer a steam-split mode: with no splitter, `libr_frac` is constant 1.0.
+The v2 GT engine has three mode switches (`operating_mode`, `gt_power_mode`, `med_bypass_mode`) and the `external_load_kW` scalar. Defaults are island / auto / auto / 0 kW — the "real-plant" semantics. There is no longer a steam-split mode: with no splitter, `libr_frac` is constant 1.0.
 
 ### 4.1 Operating mode — Island / Grid-tied
 
@@ -248,7 +248,20 @@ The v2 GT engine has two mode switches (`operating_mode`, `gt_power_mode`) and t
 
 The UI also offers a **GT load (kW)** field twinned to `load_pct` (kW = derated capacity × load% ÷ 100, the actual-power basis). It's a convenience mirror, not a separate input: in Manual it equals `GT actual power`; in Auto it's inert like `load_pct`. See [`MANUAL.md`](MANUAL.md) §3.1.
 
-### 4.3 The controller — `simulators/gt_system/control.py`
+### 4.3 MED bypass — Manual / Auto
+
+The MED 3-way bypass valve has two modes (`med_bypass_mode`, default **Auto** on both GT engines):
+
+- **Manual**: uses the fixed `med_bypass_frac` (0–1). MED cools the captured branch to `loop_cold = fw_t_C` (exactly the set-point), so it never over-cools.
+- **Auto**: a cascade with the radiator that **holds the cooling-loop return at the HRSG feedwater set-point** `fw_t_C`. MED is allowed to cool toward its real cold-end `t_med_cold = sw_t_C + med_cold_pinch_K` (default seawater + 15 K, *below* the set-point); the bypass auto-opens to the fraction that blends the MED-cooled branch (at `t_med_cold`) and the hot bypassed branch (at the LiBr rejection temperature) back to `fw_t_C`:
+
+  ```
+  med_bypass = (fw_t_C − t_med_cold) / (libr_reject_t_C − t_med_cold)   clamped [0, 1]
+  ```
+
+  So the feedwater inlet holds set-point and the radiator idles at the balance point. It prioritises MED capture (water), opening only as far as needed; it trades some desalination water to protect the feedwater temperature, and self-adjusts as load / ambient / seawater change. Resolved by `med_bypass_fraction(p)` / `med_loop_cold_C(p)` in `control.py`, shared by the single- and double-effect engines. At the design point Auto captures ≈ the same heat (≈ same MED water) as Manual `bypass=0`.
+
+### 4.4 The controller — `simulators/gt_system/control.py`
 
 `control_setpoints(p)` runs a fixed-point (up to 8 iterations, converges in 2–4 at screening fidelity) before block instantiation:
 
@@ -464,7 +477,7 @@ At the defaults the user sees (verified by live solve): GT net power supply ≈ 
 
 ## 11. Where to go from here
 
-- **Adjust the mode switches** (Operating mode, GT power) to explore the design space.
+- **Adjust the mode switches** (Operating mode, GT power, MED bypass) to explore the design space.
 - **Run Sensitivity** with multi-select inputs/KPIs to see what matters.
 - **Run a 2D sweep** of, say, `gpu_it_kW × t_ambient_C` with `Grid export` as the contoured KPI to learn the export envelope.
 - **Tick "Include latest study"** before downloading PDF/Excel to embed the chart in the report.

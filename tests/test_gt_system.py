@@ -242,5 +242,28 @@ def test_plant_pue_guards_zero_it():
     assert kpis["Plant PUE (electrical, export excluded)"] == 0.0
 
 
+# ── §8.8  Auto MED-bypass on the single-effect engine ────────────────────────
+# The auto MED-bypass cascade (replicated from the double-effect engine) holds
+# the cooling-loop return at the HRSG feedwater set-point by auto-modulating the
+# MED 3-way valve. The single-effect engine now exposes it and defaults to Auto.
+
+def test_single_effect_has_med_bypass_mode_default_auto():
+    keys = {i.key for i in _v2_engine().inputs}
+    assert {"med_bypass_mode", "med_cold_pinch_K"} <= keys, keys
+    mode_default = next(i.default for i in _v2_engine().inputs if i.key == "med_bypass_mode")
+    assert int(mode_default) == 1                       # Auto
+
+
+def test_single_effect_auto_med_bypass_holds_setpoint():
+    from nexablock.blocks import MED
+    eng = _v2_engine()
+    for fw in (60.0, 80.0):
+        v = dict(eng.defaults(), operating_mode=1, med_bypass_mode=1, fw_t_C=fw)
+        s = eng.solve(v)["solved"]
+        med = next(b for b in s.blocks if isinstance(b, MED))
+        assert abs(med.results["MED loop-out temp"].value - fw) < 1.0, fw
+        assert 0.0 < med.results["MED bypass"].value < 100.0
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

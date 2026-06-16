@@ -29,6 +29,7 @@ from nexablock.viz.svg                 import render as render_svg
 _MODE_NUM_TO_OP   = {0: "island", 1: "grid_tied"}
 _MODE_NUM_TO_GTP  = {0: "auto", 1: "manual"}
 _MODE_NUM_TO_SPL  = {0: "auto", 1: "manual"}
+_MODE_NUM_TO_MED  = {0: "manual", 1: "auto"}
 
 
 def _params_from(v: dict) -> GTSystemParams:
@@ -58,6 +59,8 @@ def _params_from(v: dict) -> GTSystemParams:
         med_effects  = int(v["med_effects"]),
         sw_t_C       = float(v["sw_t_C"]),
         med_bypass_frac     = float(v.get("med_bypass_frac",     0.0)),
+        med_bypass_mode     = _MODE_NUM_TO_MED.get(int(v.get("med_bypass_mode", 1)), "auto"),
+        med_cold_pinch_K    = float(v.get("med_cold_pinch_K",    15.0)),
         radiator_approach_K = float(v.get("radiator_approach_K", 15.0)),
         gt_aux_frac    = float(v.get("gt_aux_frac",    0.010)),
         libr_pump_frac = float(v.get("libr_pump_frac", 0.015)),
@@ -123,6 +126,11 @@ class GTSystemV2(Engine):
         InputSpec("med_effects",  "MED effects",            "-",   8.0,       1,      16),
         InputSpec("sw_t_C",       "Seawater temp",          "°C",  28.0,      0,      45),
         InputSpec("med_bypass_frac", "MED bypass (manual, 0–1)", "-", 0.0, 0.0, 1.0),
+        InputSpec("med_bypass_mode", "MED bypass control", "-", 1, 0, 1,
+                  choices={"Manual (use fraction above)": 0,
+                           "Auto (hold HRSG return set-point)": 1}),
+        InputSpec("med_cold_pinch_K", "MED cold-end approach above seawater (auto)",
+                  "K", 15.0, 5.0, 40.0),
         InputSpec("radiator_approach_K", "Radiator approach to ambient", "K", 15.0, 3, 30),
         # Plant-electrical model (IT/flow-driven). GT aux is the GT package's
         # own parasitic — an internal de-rate (GT net = gross − GT aux).

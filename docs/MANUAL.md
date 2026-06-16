@@ -81,7 +81,7 @@ The v2 GT system input list (auto-generated from the engine's `InputSpec`s) incl
 
 - **Dielectric coolant** fields — **GPU coolant T_in / T_out** (default 30°C → 42°C), **Dielectric coolant cp** (2100 J/kg·K) and **density** (780 kg/m³). This is the immersion fluid, not chilled water.
 - **LiBr rejection temperature** (`libr_reject_t_C`, default 95°C) and **HRSG feedwater / loop return set-point** (`fw_t_C`, default 80°C) — the hot and cold ends of the cooling-water loop.
-- **MED bypass (manual, 0–1)** — the 3-way valve fraction routing rejection heat around MED. **Radiator approach to ambient** (default 15 K) — the dry-cooler cold-branch approach.
+- **MED bypass (manual, 0–1)** and **MED bypass control** — the MED 3-way valve. In **Auto** (default) the bypass self-adjusts to hold the HRSG return at the feedwater set-point (the manual fraction is ignored); in **Manual** the fixed fraction is used. **MED cold-end approach above seawater (auto)** (default 15 K) sets how far below the set-point MED may cool in Auto. **Radiator approach to ambient** (default 15 K) — the dry-cooler cold-branch approach.
 - **Plant-electrical (aux) model** — itemised, IT/flow-driven: **GT aux fraction** (internal derate → GT net), **Pump efficiency** (all pumps), the pump heads **Dielectric coolant loop head**, **Cooling-water loop head**, **HRSG feed-water pump head**, **Seawater / MED pump head** (one knob drives all the ~2-bar desal/condensate pumps), the **Dry-cooler fan at full duty** fraction (VSD cube law), and the container-envelope HVAC set **40' containers per MW IT**, **Container external area**, **Envelope U-value**, **Container inside set-point**, **Lights (fraction of HVAC)**.
 
 ## 4. Reading the status cards

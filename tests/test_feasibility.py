@@ -169,9 +169,12 @@ def test_grid_mode_breakdown_has_grid_export_line(engine):
 
 def test_each_block_emits_its_own_aux_row(engine):
     from nexablock.blocks import GasTurbine, LiBrChiller, Radiator
-    # Route some rejection around MED so the radiator actually sheds heat
-    # (at med_bypass_frac=0 all rejection goes to MED → radiator fan = 0).
-    v = engine.defaults(); v["med_bypass_frac"] = 0.3
+    # Manual MED bypass routes some rejection around MED so the radiator actually
+    # sheds heat (in Auto mode the bypass holds the loop at set-point → radiator
+    # idles → fan = 0; here we want a non-zero radiator duty, so force manual).
+    v = engine.defaults()
+    v["med_bypass_mode"] = 0          # manual
+    v["med_bypass_frac"] = 0.3
     solved = engine.solve(v)["solved"]
     for cls, label in [
         (GasTurbine,   "GT aux electrical"),

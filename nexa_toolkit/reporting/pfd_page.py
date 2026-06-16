@@ -97,6 +97,8 @@ def pfd_context(engine, values, result) -> dict | None:
     med_water = k.get("MED water m3day", R(MED, "Water production m3/day"))
     med_th    = R(MED, "MED thermal input")
     med_byp   = R(MED, "MED bypass")
+    _med_mode = getattr(getattr(solved, "params", None), "med_bypass_mode", "manual")
+    _byp_tag  = "auto" if _med_mode == "auto" else "manual"
     rad_duty  = R(Radiator, "Radiator duty")
     rad_split = R(Radiator, "Through-radiator split")
 
@@ -147,7 +149,7 @@ def pfd_context(engine, values, result) -> dict | None:
         "s_steam":   f"all steam · {values.get('steam_p_bar',0):.0f} bar",
         "s_diel":    f"dielectric coolant {values.get('gpu_t_in_C',0):.0f}-{values.get('gpu_t_out_C',0):.0f}°C",
         "s_rej":     f"rejection {reject_t:.0f}°C · {qcond:,.0f} kW",
-        "s_byp":     f"MED bypass {med_byp:.0f}%",
+        "s_byp":     f"MED bypass {med_byp:.0f}% ({_byp_tag})",
         "s_return":  f"return {values.get('fw_t_C',0):.0f}°C -> HRSG feedwater (closed loop)",
         # key results
         "results": [
