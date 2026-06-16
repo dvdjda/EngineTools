@@ -47,22 +47,24 @@ def _params_from(v: dict) -> GTSystemParams:
         hrsg_eff_pct = float(v["hrsg_eff_pct"]),
         steam_p_bar  = float(v["steam_p_bar"]),
         fw_t_C       = float(v["fw_t_C"]),
-        libr_frac    = float(v["libr_frac"]),
         libr_cop     = float(v["libr_cop"]),
-        chw_sup_C    = float(v["chw_sup_C"]),
-        chw_dt_K     = float(v["chw_dt_K"]),
+        gpu_t_in_C   = float(v["gpu_t_in_C"]),
+        gpu_t_out_C  = float(v["gpu_t_out_C"]),
+        coolant_cp   = float(v.get("coolant_cp",  2100.0)),
+        coolant_rho  = float(v.get("coolant_rho",  780.0)),
+        libr_reject_t_C = float(v.get("libr_reject_t_C", 95.0)),
         gpu_it_kW    = float(v["gpu_it_kW"]),
         cassette_pue = float(v["cassette_pue"]),
         med_effects  = int(v["med_effects"]),
         sw_t_C       = float(v["sw_t_C"]),
-        t_wb_C       = float(v["t_wb_C"]),
+        med_bypass_frac     = float(v.get("med_bypass_frac",     0.0)),
+        radiator_approach_K = float(v.get("radiator_approach_K", 15.0)),
         gt_aux_frac    = float(v.get("gt_aux_frac",    0.010)),
         libr_pump_frac = float(v.get("libr_pump_frac", 0.015)),
         ct_fan_frac    = float(v.get("ct_fan_frac",    0.015)),
         bop_frac       = float(v.get("bop_frac",       0.010)),
         operating_mode    = _MODE_NUM_TO_OP.get(int(v.get("operating_mode",    0)), "island"),
         gt_power_mode     = _MODE_NUM_TO_GTP.get(int(v.get("gt_power_mode",    0)), "auto"),
-        steam_split_mode  = _MODE_NUM_TO_SPL.get(int(v.get("steam_split_mode", 0)), "auto"),
         external_load_kW  = float(v.get("external_load_kW", 0.0)),
     )
 
@@ -90,20 +92,23 @@ class GTSystemV2(Engine):
         InputSpec("t_exhaust_C",  "Exhaust temperature",    "°C",  530.0,     300,    700),
         InputSpec("hrsg_eff_pct", "HRSG effectiveness",     "%",   85.0,      50,     95),
         InputSpec("steam_p_bar",  "Steam pressure",         "bar", 10.0,      1,      40),
-        InputSpec("fw_t_C",       "Feedwater temperature",  "°C",  80.0,      20,     150),
-        InputSpec("libr_frac",    "Steam fraction to LiBr", "-",   0.50,      0.05,   0.95),
+        InputSpec("fw_t_C",       "HRSG feedwater / loop return set-point", "°C", 80.0, 20, 150),
         InputSpec("libr_cop",     "LiBr COP",               "-",   0.70,      0.5,    0.85),
-        InputSpec("chw_sup_C",    "CHW supply temp",        "°C",  7.0,       4,      15),
-        InputSpec("chw_dt_K",     "CHW ΔT",                 "K",   6.0,       2,      15),
+        InputSpec("gpu_t_in_C",   "GPU coolant T_in (dielectric)",  "°C", 7.0,  2,  20),
+        InputSpec("gpu_t_out_C",  "GPU coolant T_out (dielectric)", "°C", 13.0, 4,  30),
+        InputSpec("coolant_cp",   "Dielectric coolant cp",    "J/(kg·K)", 2100.0, 1000, 4500),
+        InputSpec("coolant_rho",  "Dielectric coolant density", "kg/m³",  780.0,  600,  1800),
+        InputSpec("libr_reject_t_C", "LiBr rejection temperature", "°C", 95.0, 60, 130),
         InputSpec("gpu_it_kW",    "GPU IT load",            "kW",  5_000.0,   100,    200_000),
         InputSpec("cassette_pue", "Cassette PUE",           "-",   1.05,      1.0,    2.0),
         InputSpec("med_effects",  "MED effects",            "-",   8.0,       1,      16),
         InputSpec("sw_t_C",       "Seawater temp",          "°C",  28.0,      0,      45),
-        InputSpec("t_wb_C",       "Cooling tower wet-bulb", "°C",  25.0,     -5,      38),
+        InputSpec("med_bypass_frac", "MED bypass (manual, 0–1)", "-", 0.0, 0.0, 1.0),
+        InputSpec("radiator_approach_K", "Radiator approach to ambient", "K", 15.0, 3, 30),
         # Plant aux electrical load fractions (screening defaults; tune for site)
         InputSpec("gt_aux_frac",    "GT aux fraction (of derated cap)",      "-", 0.010, 0.0, 0.05),
         InputSpec("libr_pump_frac", "LiBr pump fraction (of cooling)",       "-", 0.015, 0.0, 0.05),
-        InputSpec("ct_fan_frac",    "CT fan fraction (of rejected heat)",    "-", 0.015, 0.0, 0.10),
+        InputSpec("ct_fan_frac",    "Radiator fan fraction (of rejected heat)", "-", 0.015, 0.0, 0.10),
         InputSpec("bop_frac",       "Plant BoP fraction (lights/HVAC, of GT)","-", 0.010, 0.0, 0.05),
         # Operating + control modes (dimensionless: no unit shown,
         # no Custom… entry — pure two-state selectors).
@@ -112,9 +117,6 @@ class GTSystemV2(Engine):
         InputSpec("gt_power_mode",    "GT power control",              "-", 0, 0, 1,
                   choices={"Auto (follow NEXA demand)": 0,
                             "Manual (use load_pct above)": 1}),
-        InputSpec("steam_split_mode", "Steam split control",           "-", 0, 0, 1,
-                  choices={"Auto (LiBr-priority · MED residual)": 0,
-                            "Manual (use libr_frac above)": 1}),
         InputSpec("external_load_kW", "External load (kW) — island mode only",
                   "kW", 0.0, 0.0, 1_000_000.0),
     ]
@@ -129,6 +131,7 @@ class GTSystemV2(Engine):
             "audit":       audit(solved,
                                   extra_checks=gt_system_audit_checks(
                                       solved, bop_frac=params.bop_frac)),
+            "inputs":      dict(v),   # stash so chart()/PFD can rebuild context
         }
 
     def outputs(self, r: dict) -> list:
@@ -179,8 +182,15 @@ class GTSystemV2(Engine):
         return [outs[0], outs[2], outs[4], outs[5]]
 
     def chart(self, r: dict, path: str) -> str:
+        # On-screen chart = the same PFD topology as the report's landscape page
+        # (no panels), so the two always match. Falls back to the generic
+        # flowsheet if the PFD context can't be built.
+        from nexa_toolkit.reporting.pfd_page import pfd_chart_svg
+        svg = pfd_chart_svg(self, r.get("inputs", {}), r)
+        if svg is None:
+            svg = render_svg(r["solved"])
         with open(path, "w", encoding="utf-8") as f:
-            f.write(render_svg(r["solved"]))
+            f.write(svg)
         return path
 
     def study_hooks(self) -> dict:
@@ -203,25 +213,26 @@ class GTSystemV2(Engine):
             "kpis":         ["GT actual power kW", "Steam generation t/h",
                              "LiBr cooling kW",    "MED water m3day",
                              "GPU IT load kW",     "Grid export kW"],
-            "sensitivity_inputs": ["load_pct", "gt_eff", "libr_frac", "libr_cop",
-                                   "hrsg_eff_pct", "med_effects", "t_ambient_C",
-                                   "gpu_it_kW", "external_load_kW"],
-            "sweep_inputs": ["load_pct", "gt_eff", "libr_frac", "libr_cop",
-                             "hrsg_eff_pct", "t_ambient_C",
+            "sensitivity_inputs": ["load_pct", "gt_eff", "libr_cop", "libr_reject_t_C",
+                                   "hrsg_eff_pct", "med_effects", "med_bypass_frac",
+                                   "t_ambient_C", "gpu_it_kW", "external_load_kW"],
+            "sweep_inputs": ["load_pct", "gt_eff", "libr_cop", "libr_reject_t_C",
+                             "hrsg_eff_pct", "med_bypass_frac", "t_ambient_C",
                              "gpu_it_kW", "external_load_kW"],
             "bounds": {
                 "load_pct":         (10.0,   100.0),
                 "gt_eff":           (0.15,    0.45),
-                "libr_frac":        (0.05,    0.95),
                 "libr_cop":         (0.5,     0.85),
+                "libr_reject_t_C":  (60.0,    130.0),
                 "hrsg_eff_pct":     (50.0,    95.0),
+                "med_bypass_frac":  (0.0,     1.0),
                 "t_ambient_C":      (-10.0,   55.0),
                 "gpu_it_kW":        (100.0,   50_000.0),
                 "external_load_kW": (0.0,     20_000.0),
             },
             "step_override": {"med_effects": 1.0},
             "scenarios": {
-                "summer peak":     {"t_ambient_C": 40.0, "load_pct": 100.0, "t_wb_C": 30.0},
-                "winter low load": {"t_ambient_C":  5.0, "load_pct":  40.0, "t_wb_C": 10.0},
+                "summer peak":     {"t_ambient_C": 40.0, "load_pct": 100.0},
+                "winter low load": {"t_ambient_C":  5.0, "load_pct":  40.0},
             },
         }

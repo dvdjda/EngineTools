@@ -19,8 +19,8 @@ if _ROOT not in sys.path:
 
 from nexablock.core.stream  import Stream, StreamKind
 from nexablock.core.system  import System, SolvedSystem
-from nexablock.blocks       import (GasTurbine, HRSG, SteamSplitter,
-                                     LiBrChiller, MED, GPUCassette, CoolingTower)
+from nexablock.blocks       import (GasTurbine, HRSG, LiBrChiller, MED,
+                                     GPUCassette, Radiator)
 
 
 @dataclass
@@ -31,33 +31,34 @@ class GTSystemParams:
     gt_eff:       float = 0.35
     t_ambient_C:  float = 25.0
     t_exhaust_C:  float = 530.0
-    # HRSG
+    # HRSG.  fw_t_C is the feedwater / loop return set-point (the radiator + MED
+    # bypass blend the cooling loop back to this temperature).
     hrsg_eff_pct: float = 85.0
     steam_p_bar:  float = 10.0
-    fw_t_C:       float = 80.0
-    # Steam split
-    libr_frac:    float = 0.50
-    # LiBr chiller
+    fw_t_C:       float = 80.0       # HRSG feedwater return set-point
+    # LiBr chiller + GPU dielectric-coolant loop.  All HRSG steam → LiBr (no splitter).
     libr_cop:     float = 0.70
-    chw_sup_C:    float = 7.0
-    chw_dt_K:     float = 6.0
+    gpu_t_in_C:   float = 7.0      # dielectric coolant supply to the GPU
+    gpu_t_out_C:  float = 13.0     # dielectric coolant return from the GPU
+    coolant_cp:   float = 2100.0   # dielectric fluid specific heat  (J/kg·K) — NOT water
+    coolant_rho:  float = 780.0    # dielectric fluid density (kg/m³) — single-phase immersion
+    libr_reject_t_C:  float = 95.0   # LiBr heat-rejection (hot cooling-loop) temperature
     # GPU data centre
     gpu_it_kW:    float = 5_000.0
     cassette_pue: float = 1.05       # cassette overhead = IT × (cassette_pue − 1)
-    # MED
+    # MED (rejection-driven) + radiator
     med_effects:  int   = 8
     sw_t_C:       float = 28.0
-    # Cooling tower
-    t_wb_C:       float = 25.0
+    med_bypass_frac:   float = 0.0   # manual 3-way: fraction of rejection routed around MED
+    radiator_approach_K: float = 15.0  # radiator cold-branch approach to ambient
     # Plant aux loads (electrical, kW = fraction × base)
     gt_aux_frac:    float = 0.010    # GT aux as fraction of derated GT capacity
     libr_pump_frac: float = 0.015    # LiBr solution+refrigerant pumps as fraction of cooling
-    ct_fan_frac:    float = 0.015    # CT fans as fraction of rejected heat
+    ct_fan_frac:    float = 0.015    # Radiator fans as fraction of rejected heat
     bop_frac:       float = 0.010    # Plant balance-of-plant (lights/HVAC/etc) as fraction of GT power
     # ── Operating + control modes ────────────────────────────────────────────
     operating_mode:    str   = "island"     # "island" | "grid_tied"
-    gt_power_mode:     str   = "auto"       # "auto" | "manual"  — auto: follow GPU/cooling demand
-    steam_split_mode:  str   = "auto"       # "auto" | "manual"  — auto: LiBr-priority, MED gets residual
+    gt_power_mode:     str   = "auto"       # "auto" | "manual"  — auto: follow electrical demand
     external_load_kW:  float = 0.0          # island: user-entered; grid_tied: ignored (auto-export)
 
 
@@ -85,23 +86,27 @@ def build_gt_system(p: GTSystemParams) -> SolvedSystem:
                 steam_p_bar=p.steam_p_bar,
                 fw_t_C=p.fw_t_C))
 
-    splitter= sys.add(SteamSplitter(libr_frac=cs.libr_frac))
-
+    _coolant_dt = max(0.1, p.gpu_t_out_C - p.gpu_t_in_C)   # K, dielectric loop ΔT
     chiller = sys.add(LiBrChiller(
-                cop=p.libr_cop, chw_sup_C=p.chw_sup_C, chw_dt_K=p.chw_dt_K,
-                pump_frac=p.libr_pump_frac))
+                cop=p.libr_cop, chw_sup_C=p.gpu_t_in_C, chw_dt_K=_coolant_dt,
+                chw_cp=p.coolant_cp, pump_frac=p.libr_pump_frac,
+                reject_t_C=p.libr_reject_t_C, reject_return_C=p.fw_t_C))
 
     gpu     = sys.add(GPUCassette(
                 n_gpu=1, p_gpu_kW=p.gpu_it_kW,   # 1 virtual cassette = whole DC
                 aux_frac=p.cassette_pue - 1.0,
-                coolant_cp=4187.0, coolant_rho=1000.0, dt_K=p.chw_dt_K))
+                coolant_cp=p.coolant_cp, coolant_rho=p.coolant_rho,
+                dt_K=_coolant_dt))
 
     med     = sys.add(MED(
-                n_effects=p.med_effects, sw_t_C=p.sw_t_C))
+                n_effects=p.med_effects, sw_t_C=p.sw_t_C,
+                bypass_frac=p.med_bypass_frac, loop_cold_C=p.fw_t_C))
 
-    ct      = sys.add(CoolingTower(t_wb_C=p.t_wb_C, fan_frac=p.ct_fan_frac))
+    rad     = sys.add(Radiator(
+                t_ambient_C=p.t_ambient_C, approach_K=p.radiator_approach_K,
+                t_return_C=p.fw_t_C, fan_frac=p.ct_fan_frac))
 
-    # ── Feedwater seed stream (no upstream block — source) ────────────────────
+    # ── Feedwater seed (tear initialiser for the cooling-loop recycle) ────────
     fw_seed = Stream.water_steam(
         mdot=20.0, T=p.fw_t_C + 273.15, P=p.steam_p_bar * 1e5,
         h=4.19 * p.fw_t_C * 1e3, label="Feedwater seed")
@@ -114,12 +119,19 @@ def build_gt_system(p: GTSystemParams) -> SolvedSystem:
     med.inlets["seawater"].stream = sw_seed
 
     # ── Wire connections ──────────────────────────────────────────────────────
-    sys.connect(gt.outlets["exhaust"],        hrsg.inlets["exhaust_in"])
-    sys.connect(hrsg.outlets["steam"],        splitter.inlets["steam_in"])
-    sys.connect(splitter.outlets["to_libr"],  chiller.inlets["steam_in"])
-    sys.connect(splitter.outlets["to_med"],   med.inlets["steam_in"])
-    sys.connect(chiller.outlets["ct_water_out"], ct.inlets["heat_in"])
+    sys.connect(gt.outlets["exhaust"],     hrsg.inlets["exhaust_in"])
+    sys.connect(hrsg.outlets["steam"],     chiller.inlets["steam_in"])   # all steam → LiBr
     sys.connect(chiller.outlets["chw_supply"], gpu.inlets["coolant_in"])
+    sys.connect(gpu.outlets["coolant_out"], chiller.inlets["chw_return"])  # dielectric loop (recycle)
+    # Cooling-water loop: LiBr rejection → MED (rejection-driven) → radiator.
+    # The radiator trims the return to fw_t_C (the HRSG feedwater set-point), so
+    # the loop closes back to the HRSG feedwater by the controlled-return ==
+    # feedwater-temp coupling (the feedwater seed is at fw_t_C). It isn't a
+    # graph cycle because the controlled return makes the feedwater temperature
+    # fixed — no feedback to iterate. The dielectric chilled loop is the real
+    # recycle (GPU heat → LiBr).
+    sys.connect(chiller.outlets["reject_out"], med.inlets["loop_in"])
+    sys.connect(med.outlets["loop_out"],       rad.inlets["loop_in"])
 
     # ── Solve ─────────────────────────────────────────────────────────────────
     solved = sys.solve()
@@ -162,7 +174,7 @@ def summary(solved: SolvedSystem) -> dict[str, float]:
     it_kW        = kpis["GPU IT load kW"]
     overhead_kW  = _get(GPUCassette, "Cassette overhead electrical") or 0.0
     libr_pump_kW = _get(LiBrChiller, "LiBr pump electrical")         or 0.0
-    ct_fan_kW    = _get(CoolingTower, "CT fan electrical")           or 0.0
+    ct_fan_kW    = _get(Radiator,    "Radiator fan electrical")      or 0.0
     gt_aux_kW    = _get(GasTurbine,  "GT aux electrical")            or 0.0
     bop_kW       = max(0.0, getattr(solved, "bop_frac", 0.010)) * kpis["GT actual power kW"]
     kpis["Plant PUE (electrical, export excluded)"] = (

@@ -6,8 +6,9 @@ from .steam_splitter  import SteamSplitter
 from .libr_chiller    import LiBrChiller
 from .med             import MED
 from .cooling_tower   import CoolingTower
+from .radiator        import Radiator
 
 __all__ = [
     "GPUCassette", "GasTurbine", "HRSG", "SteamSplitter",
-    "LiBrChiller", "MED", "CoolingTower",
+    "LiBrChiller", "MED", "CoolingTower", "Radiator",
 ]

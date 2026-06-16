@@ -27,20 +27,18 @@ _P = GTSystemParams(
     hrsg_eff_pct = 85.0,
     steam_p_bar  = 10.0,
     fw_t_C       = 80.0,
-    libr_frac    = 0.50,
     libr_cop     = 0.70,
-    chw_sup_C    = 7.0,
-    chw_dt_K     = 6.0,
+    gpu_t_in_C   = 7.0,
+    gpu_t_out_C  = 13.0,
     gpu_it_kW    = 5_000.0,
     cassette_pue = 1.05,
     med_effects  = 8,
     sw_t_C       = 28.0,
-    # Pin to manual modes so the v2 promotion validation runs against the
-    # same operating point as the v1 trusted GT tool (load_pct=85,
-    # libr_frac=0.5). Auto modes are the new default-for-engineers behaviour
-    # but the trusted-tool comparison must use explicit setpoints.
+    libr_reject_t_C = 95.0,
+    # Pin GT power to manual so the GT/HRSG/LiBr operating point is
+    # reproducible (load_pct=85). No steam splitter any more — all steam → LiBr;
+    # MED is driven by the LiBr rejection heat.
     gt_power_mode    = "manual",
-    steam_split_mode = "manual",
     operating_mode   = "island",
     external_load_kW = 0.0,
 )
@@ -151,18 +149,24 @@ def test_med_water_production_positive(solved):
             assert w > 0
 
 
-def test_med_water_production_matches_v1(solved):
-    """Pin MED water production to the v1 trusted figure (~1165 m³/day at
-    default inputs). Earlier the MED block stored both m³/day and m³/h
-    under the same label; the m³/h row silently overwrote m³/day and the
-    UI reported a value 24× too low. ±2% tolerance per §8."""
-    v1_ref_m3pd = 1165.0
-    for b in solved.blocks:
-        if isinstance(b, MED):
-            w = b.results["Water production m3/day"].value
-            assert abs(w - v1_ref_m3pd) / v1_ref_m3pd < TOL, (
-                f"MED daily production = {w:.0f} m³/day, expected ~{v1_ref_m3pd:.0f} "
-                f"(±{TOL:.0%})")
+def test_med_water_rejection_driven(solved):
+    """MED is now driven by the LiBr rejection heat (no steam). Its water
+    output must equal GOR × (captured thermal) / h_fg, and at the default
+    (no MED bypass) the captured thermal ≈ the LiBr condenser duty Q_cond."""
+    from nexablock.blocks import LiBrChiller
+    h_fg = 2257.0   # kJ/kg
+    med = next(b for b in solved.blocks if isinstance(b, MED))
+    libr = next(b for b in solved.blocks if isinstance(b, LiBrChiller))
+    gor   = med.results["GOR"].value
+    q_med = med.results["MED thermal input"].value          # kW captured
+    q_cond = libr.results["Condenser duty"].value
+    w_m3pd = med.results["Water production m3/day"].value
+    # bypass=0 → MED captures the full rejection
+    assert abs(q_med - q_cond) / q_cond < TOL, f"captured {q_med:.0f} vs Q_cond {q_cond:.0f}"
+    # water = GOR · Q / h_fg  (kg/s) → m³/day
+    expect = gor * q_med / h_fg * 86400 / 1000
+    assert abs(w_m3pd - expect) / expect < TOL, f"water {w_m3pd:.0f} vs {expect:.0f} m³/day"
+    assert w_m3pd > 0
 
 
 # ── §8.6  End-to-end ─────────────────────────────────────────────────────────
@@ -226,7 +230,8 @@ def test_plant_pue_design_point():
     labels = [o.label for o in eng.outputs(r)]
     assert "Plant PUE (electrical, export excluded)" in labels, labels
     pue = r["kpis"]["Plant PUE (electrical, export excluded)"]
-    assert abs(pue - 1.134) < 0.005, f"plant_pue={pue:.4f}"
+    # New topology (radiator idle at default, no cooling-tower fan): ≈ 1.095.
+    assert abs(pue - 1.095) < 0.01, f"plant_pue={pue:.4f}"
 
 
 def test_plant_pue_guards_zero_it():

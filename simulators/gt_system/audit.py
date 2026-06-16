@@ -9,7 +9,7 @@ whole composition or that depend on the resolved control modes
 from __future__ import annotations
 
 from nexablock.audit import energy_balance, pass_fail, bounds_check
-from nexablock.blocks import GasTurbine, GPUCassette, MED, LiBrChiller, CoolingTower
+from nexablock.blocks import GasTurbine, GPUCassette, MED, LiBrChiller, Radiator
 
 
 def _first(solved, cls):
@@ -29,7 +29,7 @@ def gt_system_audit_checks(solved, bop_frac: float = 0.010) -> list:
     gpu  = _first(solved, GPUCassette)
     med  = _first(solved, MED)
     libr = _first(solved, LiBrChiller)
-    ct   = _first(solved, CoolingTower)
+    ct   = _first(solved, Radiator)
 
     cs = getattr(solved, "control", None)
     operating_mode = getattr(solved, "operating_mode", "island")
@@ -40,7 +40,7 @@ def gt_system_audit_checks(solved, bop_frac: float = 0.010) -> list:
     overhead_kW = _read(gpu, "Cassette overhead electrical")
     med_aux_kW  = _read(med,  "MED electrical")
     libr_aux_kW = _read(libr, "LiBr pump electrical")
-    ct_aux_kW   = _read(ct,   "CT fan electrical")
+    ct_aux_kW   = _read(ct,   "Radiator fan electrical")
     gt_aux_kW   = _read(gt,   "GT aux electrical")
     bop_aux_kW  = max(0.0, bop_frac) * actual_kW
     nexa_demand = (silicon_kW + overhead_kW + med_aux_kW + libr_aux_kW

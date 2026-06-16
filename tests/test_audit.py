@@ -88,11 +88,12 @@ def default_audit(engine):
     return engine.solve(engine.defaults())["audit"]
 
 
-def test_audit_emits_44_checks_in_island_auto_mode(default_audit):
-    """Island + auto: 39 base block checks + 5 composition checks (E9 bus
-    closure, F1 island balance, F2 external load non-neg, F3 derived load
-    ≤100%, F4 derived libr ≤1) = 44 total."""
-    assert len(default_audit.checks) == 44
+def test_audit_emits_42_checks_in_island_auto_mode(default_audit):
+    """Island + auto, post-rework (no steam splitter; radiator instead of
+    cooling tower; MED rejection-driven): block checks + composition checks
+    (E9 bus closure, F1 island balance, F2 external load non-neg, F3 derived
+    load ≤100%) = 42 total."""
+    assert len(default_audit.checks) == 42
 
 
 def test_audit_categories_present(default_audit):
@@ -101,13 +102,12 @@ def test_audit_categories_present(default_audit):
 
 
 def test_audit_category_counts(default_audit):
-    """Per-category counts: 10 Energy (E1-E8 + M6 + E9), 7 Mass, 10 Second
-    law, 17 Plausibility (13 base + F1 + F2 + F3 + F4)."""
+    """Per-category counts after the cooling-loop rework."""
     by_cat = default_audit.by_category()
     assert len(by_cat["Energy closure"]) == 10
-    assert len(by_cat["Mass closure"])   == 7
-    assert len(by_cat["Second law"])     == 10
-    assert len(by_cat["Plausibility"])   == 17
+    assert len(by_cat["Mass closure"])   == 5
+    assert len(by_cat["Second law"])     == 11
+    assert len(by_cat["Plausibility"])   == 16
 
 
 def test_default_audit_passes_within_screening_tolerance(default_audit):

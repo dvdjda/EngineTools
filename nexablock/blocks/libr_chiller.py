@@ -39,13 +39,17 @@ class LiBrChiller(Block):
                  chw_sup_C:  float = 7.0,
                  chw_dt_K:   float = 6.0,
                  chw_cp:     float = 4187.0,
-                 pump_frac:  float = 0.015) -> None:    # 1.5% of cooling (screening)
+                 pump_frac:  float = 0.015,             # 1.5% of cooling (screening)
+                 reject_t_C: float = 95.0,              # hot cooling-loop temperature
+                 reject_return_C: float = 80.0) -> None: # loop cold side (HRSG return set-point)
         super().__init__()
         self._cop       = cop
         self._chw_sup   = chw_sup_C + 273.15
         self._chw_dt    = chw_dt_K
         self._chw_cp    = chw_cp
         self._pump_frac = pump_frac
+        self._reject_t  = reject_t_C + 273.15
+        self._reject_ret= reject_return_C + 273.15
 
     def _build_params(self) -> dict[str, Param]:
         return {
@@ -55,6 +59,8 @@ class LiBrChiller(Block):
             "chw_cp":    Param(self._chw_cp, "J/(kg·K)"),
             "pump_frac": Param(self._pump_frac, "-", min=0.0, max=0.05,
                                 desc="Solution + refrigerant pump electrical as fraction of cooling"),
+            "reject_t":   Param(self._reject_t,   "K", desc="Cooling-loop hot temperature (rejection)"),
+            "reject_ret": Param(self._reject_ret, "K", desc="Cooling-loop cold side (HRSG return set-point)"),
         }
 
     def _build_inlets(self) -> dict[str, Port]:
@@ -67,7 +73,9 @@ class LiBrChiller(Block):
         return {
             "condensate":   Port("condensate",   StreamKind.WATER_STEAM,   "out"),
             "chw_supply":   Port("chw_supply",   StreamKind.GENERIC_FLUID, "out"),
-            "ct_water_out": Port("ct_water_out", StreamKind.ENERGY,        "out"),
+            # Heat rejection now leaves as a hot WATER stream into the cooling
+            # loop (drives MED, then the radiator, then back to HRSG feedwater).
+            "reject_out":   Port("reject_out",   StreamKind.WATER_STEAM,   "out"),
         }
 
     def compute(self) -> None:
@@ -76,9 +84,9 @@ class LiBrChiller(Block):
         chw_cp = self._p("chw_cp")
 
         if s is None or s.mdot is None or s.mdot == 0:
-            self._out_set("condensate",   Stream.water_steam(0.0, 373.15, _P_ATM))
-            self._out_set("chw_supply",   Stream.fluid(0.0, chw_sup, 3e5))
-            self._out_set("ct_water_out", Stream.energy(0.0))
+            self._out_set("condensate", Stream.water_steam(0.0, 373.15, _P_ATM))
+            self._out_set("chw_supply", Stream.fluid(0.0, chw_sup, 3e5))
+            self._out_set("reject_out", Stream.water_steam(0.0, self._p("reject_t"), 2e5))
             return
 
         h_cond_100 = _props.h_sat_liq(_P_ATM)              # J/kg  condensate at 100°C (saturated liquid; h_water at T_sat picks vapour)
@@ -97,7 +105,15 @@ class LiBrChiller(Block):
         self._out_set("chw_supply", Stream.fluid(
             mdot=mdot_chw, T=chw_sup, P=3e5, cp=chw_cp, rho=1000.0,
             label="CHW supply"))
-        self._out_set("ct_water_out", Stream.energy(power=q_cond_ct, label="LiBr condenser→CT"))
+        # Heat rejection → hot cooling-loop water. mdot sized so the loop carries
+        # Q_cond across the (reject_t − return) window. This water drives MED,
+        # is trimmed by the radiator, and returns to the HRSG feedwater.
+        cp_w     = 4187.0
+        reject_t = self._p("reject_t"); reject_ret = self._p("reject_ret")
+        loop_dt  = max(1.0, reject_t - reject_ret)
+        mdot_cw  = q_cond_ct / (cp_w * loop_dt)            # kg/s
+        self._out_set("reject_out", Stream.water_steam(
+            mdot=mdot_cw, T=reject_t, P=2e5, label="LiBr rejection (hot loop water)"))
 
         pump_kW = self._p("pump_frac") * q_cool / 1e3      # solution + refrigerant pumps
 
@@ -111,6 +127,8 @@ class LiBrChiller(Block):
         self._result("COP achieved",         cop,           "-",   "input")
         self._result("LiBr pump electrical", pump_kW,       "kW",  "screening",
                      "pump_frac × Q_cool (screening)")
+        self._result("Rejection loop flow", mdot_cw*3.6,    "m³/h","verified")
+        self._result("Rejection loop temp", reject_t-273.15,"°C",  "input")
 
     def references(self):
         return [Reference(

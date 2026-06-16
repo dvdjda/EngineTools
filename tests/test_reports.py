@@ -264,7 +264,7 @@ def test_xlsx_high_gpu_load_shows_both_deficits(engine, hooks, tmp_path):
     assert "immersion"                 in joined.lower()
     assert "unverified"                in joined
     for line in ("LiBr pump electrical",
-                 "Cooling tower fan electrical",
+                 "Radiator fan electrical",
                  "GT auxiliaries",
                  "Plant BoP",
                  "LiBr cooling capacity",
@@ -273,7 +273,9 @@ def test_xlsx_high_gpu_load_shows_both_deficits(engine, hooks, tmp_path):
                  "GT actual power (supply)",
                  "Derated capacity (max available)"):
         assert line in joined, f"line {line!r} missing"
-    assert "no recycle loops" in joined
+    # GT v2 now has the dielectric-coolant recycle loop, so it converges via
+    # iteration (not "no recycle loops"); convergence stays green.
+    assert "NOT CONVERGED" not in joined
 
 
 def test_xlsx_gpu_10mw_shows_cooling_deficit(engine, tmp_path):
@@ -306,8 +308,8 @@ def test_xlsx_grid_auto_default_no_deficits(engine, tmp_path):
 
 
 def test_xlsx_converged_no_warning(engine, vals, solved, tmp_path):
-    """Sanity counter-example: GT v2 acyclic solve produces a green convergence
-    summary, no warning text in the workbook."""
+    """Sanity counter-example: a clean GT v2 solve produces a green convergence
+    summary (the dielectric-coolant recycle settles), no warning in the workbook."""
     from openpyxl import load_workbook
     p = tmp_path / "good.xlsx"
     build_excel(engine, vals, solved, str(p))
@@ -316,7 +318,7 @@ def test_xlsx_converged_no_warning(engine, vals, solved, tmp_path):
     for row in ws.iter_rows(values_only=True):
         cells.extend(str(c) for c in row if c is not None)
     joined = "\n".join(cells)
-    assert "no recycle loops" in joined
+    assert "converged" in joined.lower()
     assert "NOT CONVERGED" not in joined
 
 

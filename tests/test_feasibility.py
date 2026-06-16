@@ -21,12 +21,11 @@ def engine():
 
 
 def _manual_defaults(engine):
-    """Defaults pinned to manual modes so libr_frac / load_pct overrides
-    take effect — the feasibility tests target the original v1-trusted
-    operating point semantics."""
+    """Defaults pinned to manual GT power so the load_pct=85 override takes
+    effect — the feasibility tests target the original v1-trusted operating
+    point semantics. (The steam splitter is gone; all steam → LiBr.)"""
     v = engine.defaults()
     v["gt_power_mode"]     = 1     # manual
-    v["steam_split_mode"]  = 1     # manual
     v["operating_mode"]    = 0     # island
     return v
 
@@ -51,36 +50,35 @@ def test_aggregate_feasible_iff_every_balance_passes():
 
 # ── defaults reveal a real cooling deficit ───────────────────────────────────
 
-def test_manual_legacy_excess_power_AND_cooling_deficit(engine):
-    """v1-legacy manual operating point (load_pct=85, libr_frac=0.5,
-    island): GT produces ~7905 kW but NEXA only consumes ~5680 kW —
-    ~2200 kW of excess electrical with no sink in island. Power balance
-    flags as 'didn't close' (excess > tolerance). Cooling separately
-    shows the original ~1660 kW LiBr-undersized deficit. Two real
-    engineering findings, both surfaced."""
+def test_manual_island_excess_power(engine):
+    """Manual island operating point (load_pct=85): GT produces ~7905 kW
+    but NEXA only consumes ~5797 kW — ~2100 kW of excess electrical with
+    no sink in island. Power balance flags as 'didn't close' (excess >
+    tolerance). With all steam → LiBr the chiller is now oversized at
+    load_pct=85, so cooling is feasible — the excess-power finding is the
+    one that stands."""
     f = engine.solve(_manual_defaults(engine))["feasibility"]
     power   = f.by("Power")
     cooling = f.by("Cooling capacity")
     # Power: not feasible because supply > demand and there's no sink (island).
     assert not power.feasible
     assert power.balance > 0                    # excess
-    assert power.shortfall > 1000               # |excess| ≈ 2200 kW
-    # Cooling: original undersize finding still holds.
-    assert not cooling.feasible
-    assert 1500 < cooling.shortfall < 1800
-    assert f.feasible is False
+    assert power.shortfall > 1000               # |excess| ≈ 2100 kW
+    # Cooling: all steam → LiBr, oversized at this load → feasible.
+    assert cooling.feasible
+    assert cooling.supply > cooling.demand
+    assert f.feasible is False                  # power excess fails aggregate
 
 
-# ── higher LiBr split closes the cooling gap ────────────────────────────────
+# ── all steam → LiBr keeps cooling comfortably above GPU heat ───────────────
 
-def test_higher_libr_split_makes_cooling_feasible(engine):
-    """libr_frac=0.85 sends most steam to the chiller. Cooling supply jumps
-    above GPU heat demand → cooling balance feasible.
-    NOTE: aggregate.feasible can still be False in manual island because
-    of the power-bus excess (load_pct=85 produces more than NEXA consumes);
+def test_manual_island_cooling_supply_exceeds_demand(engine):
+    """All HRSG steam drives the chiller, so cooling supply sits well above
+    GPU heat demand → cooling balance feasible.
+    NOTE: aggregate.feasible is still False in manual island because of the
+    power-bus excess (load_pct=85 produces more than NEXA consumes);
     cooling is the assertion of interest here."""
-    v = _manual_defaults(engine); v["libr_frac"] = 0.85
-    f = engine.solve(v)["feasibility"]
+    f = engine.solve(_manual_defaults(engine))["feasibility"]
     assert f.by("Cooling capacity").feasible
     assert f.by("Cooling capacity").supply > f.by("Cooling capacity").demand
 
@@ -141,7 +139,7 @@ def test_power_breakdown_uses_actual_supply_and_lists_every_consumer(engine):
         "Cassette overhead (pumps/ctl)",
         "MED electrical (pumps)",
         "LiBr pump electrical",
-        "Cooling tower fan electrical",
+        "Radiator fan electrical",
         "GT auxiliaries",
         "Plant BoP (lights/HVAC)",
         "External load (island, manual)",
@@ -164,12 +162,15 @@ def test_grid_mode_breakdown_has_grid_export_line(engine):
 
 
 def test_each_block_emits_its_own_aux_row(engine):
-    from nexablock.blocks import GasTurbine, LiBrChiller, CoolingTower
-    solved = engine.solve(engine.defaults())["solved"]
+    from nexablock.blocks import GasTurbine, LiBrChiller, Radiator
+    # Route some rejection around MED so the radiator actually sheds heat
+    # (at med_bypass_frac=0 all rejection goes to MED → radiator fan = 0).
+    v = engine.defaults(); v["med_bypass_frac"] = 0.3
+    solved = engine.solve(v)["solved"]
     for cls, label in [
         (GasTurbine,   "GT aux electrical"),
         (LiBrChiller,  "LiBr pump electrical"),
-        (CoolingTower, "CT fan electrical"),
+        (Radiator,     "Radiator fan electrical"),
     ]:
         b = next(b for b in solved.blocks if isinstance(b, cls))
         assert label in b.results
@@ -194,10 +195,10 @@ def test_high_gpu_load_fails_both_power_and_cooling(engine):
     c = f.by("Cooling capacity")
     assert not p.feasible
     assert not c.feasible
-    # Power deficit: demand 10500 + aux ~430 ≈ 10930, supply 7905 → shortfall ~3025
-    assert 2800 < p.shortfall < 3200
-    # Cooling shortfall unchanged.
-    assert 6500 < c.shortfall < 7200
+    # Power deficit: demand ~11050, supply 7905 → shortfall ~3140
+    assert 2800 < p.shortfall < 3400
+    # Cooling deficit: LiBr supply ~7179 vs demand 10500 → shortfall ~3320.
+    assert 3000 < c.shortfall < 3600
     assert not f.feasible
 
 

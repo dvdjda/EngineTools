@@ -18,7 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from nexablock.blocks import (GasTurbine, GPUCassette, MED, LiBrChiller,
-                              CoolingTower)
+                              Radiator)
 
 
 POWER_ASSUMPTION_ISLAND = (
@@ -150,7 +150,7 @@ def power_balance(solved, assumption: str | None = None,
     gpu  = _first(solved, GPUCassette)
     med  = _first(solved, MED)
     libr = _first(solved, LiBrChiller)
-    ct   = _first(solved, CoolingTower)
+    ct   = _first(solved, Radiator)
 
     derated_kW = _read(gt, "GT derated capacity")            # info only
     actual_kW  = _read(gt, "GT actual power")                # SUPPLY — what GT really produces
@@ -160,7 +160,7 @@ def power_balance(solved, assumption: str | None = None,
 
     med_aux_kW  = _read(med,  "MED electrical")
     libr_aux_kW = _read(libr, "LiBr pump electrical")
-    ct_aux_kW   = _read(ct,   "CT fan electrical")
+    ct_aux_kW   = _read(ct,   "Radiator fan electrical")
     gt_aux_kW   = _read(gt,   "GT aux electrical")
     bop_aux_kW  = max(0.0, bop_frac) * actual_kW
 
@@ -187,7 +187,7 @@ def power_balance(solved, assumption: str | None = None,
         "Cassette overhead (pumps/ctl)":   overhead_kW,
         "MED electrical (pumps)":          med_aux_kW,
         "LiBr pump electrical":            libr_aux_kW,
-        "Cooling tower fan electrical":    ct_aux_kW,
+        "Radiator fan electrical":         ct_aux_kW,
         "GT auxiliaries":                  gt_aux_kW,
         "Plant BoP (lights/HVAC)":         bop_aux_kW,
     }

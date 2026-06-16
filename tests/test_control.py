@@ -1,8 +1,12 @@
 """
-tests/test_control.py — operating modes + GT auto-power + LiBr-priority split.
+tests/test_control.py — operating modes + GT auto-power.
 
 Covers the controller's mode-handling logic and how it propagates to the
 solved system, the feasibility check, and the audit.
+
+The steam splitter has been removed: all HRSG steam goes to the LiBr
+chiller, so libr_frac is always 1.0 and is never auto-derived. MED is now
+driven by LiBr heat REJECTION, not by residual steam.
 """
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -12,8 +16,7 @@ from simulators.gt_system.system    import GTSystemParams, build_gt_system, summ
 
 
 def _solve(**kwargs):
-    base = dict(operating_mode="island", gt_power_mode="auto",
-                steam_split_mode="auto")
+    base = dict(operating_mode="island", gt_power_mode="auto")
     base.update(kwargs)
     return build_gt_system(GTSystemParams(**base))
 
@@ -25,16 +28,18 @@ def test_solved_carries_control_state():
     assert hasattr(solved, "control")
     cs = solved.control
     assert cs.derived_load_pct is True
-    assert cs.derived_libr_frac is True
+    # No splitter: libr_frac is always 1.0 and never auto-derived.
+    assert cs.libr_frac == pytest.approx(1.0)
+    assert cs.derived_libr_frac is False
     assert cs.iterations >= 1
 
 
-def test_manual_modes_pass_through_unchanged():
-    solved = _solve(gt_power_mode="manual", steam_split_mode="manual",
-                     load_pct=85.0, libr_frac=0.50)
+def test_manual_gt_power_mode_passes_load_pct_through_unchanged():
+    solved = _solve(gt_power_mode="manual", load_pct=85.0)
     cs = solved.control
     assert cs.load_pct == pytest.approx(85.0)
-    assert cs.libr_frac == pytest.approx(0.50)
+    # All steam → LiBr regardless of mode.
+    assert cs.libr_frac == pytest.approx(1.0)
     assert cs.derived_load_pct is False
     assert cs.derived_libr_frac is False
 
@@ -90,41 +95,22 @@ def test_grid_mode_no_manual_external_load():
     assert solved.control.external_load_kW == 0.0
 
 
-# ── LiBr-priority split (steam_split_mode=auto) ─────────────────────────────
+# ── MED is rejection-driven, so it produces water at every load ─────────────
 
-def test_auto_libr_frac_is_residual_steam_balancer():
-    """In auto split, libr_frac is derived to cover exactly the GPU heat;
-    MED is the residual. If steam is just enough, libr_frac = 1.0."""
-    solved = _solve(gpu_it_kW=5000.0, operating_mode="grid_tied")
-    cs = solved.control
-    assert 0.0 < cs.libr_frac <= 1.0
-
-
-def test_external_load_pushes_gt_up_so_med_gets_residual_steam():
-    """In auto mode the controller sizes the GT to just cover cooling needs
-    plus a safety margin — MED gets ~no steam by default. To get residual
-    steam to MED you need extra electrical demand (island external load,
-    or manual mode with higher load_pct). With a big island external load
-    pushing the GT well above what cooling alone needs, libr_frac drops
-    below 1.0 and MED produces water."""
-    solved = _solve(gpu_it_kW=3000.0,
-                     operating_mode="island",
-                     external_load_kW=5000.0)
-    cs = solved.control
-    k = summary(solved)
-    assert cs.libr_frac < 1.0, (
-        f"external load should have pushed GT up enough to leave residual; "
-        f"libr_frac = {cs.libr_frac}")
-    assert k["MED water m3day"] > 0
-
-
-def test_manual_mode_with_split_lets_med_produce_water():
-    """Manual mode with libr_frac=0.5 always gives MED half the steam."""
-    solved = _solve(gpu_it_kW=5000.0,
-                     gt_power_mode="manual", load_pct=85.0,
-                     steam_split_mode="manual", libr_frac=0.5)
-    assert solved.control.libr_frac == 0.5
+def test_med_produces_water_at_default():
+    """All steam → LiBr; MED is driven by LiBr heat rejection, so it
+    produces water even at default (no residual-steam gate any more)."""
+    solved = _solve(gpu_it_kW=5000.0)
+    assert solved.control.libr_frac == pytest.approx(1.0)
     assert summary(solved)["MED water m3day"] > 0
+
+
+def test_med_bypass_reduces_water():
+    """Routing rejection around MED with med_bypass_frac cuts water output."""
+    full   = summary(_solve(gpu_it_kW=5000.0))["MED water m3day"]
+    bypass = summary(_solve(gpu_it_kW=5000.0, med_bypass_frac=0.5))["MED water m3day"]
+    assert full > 0
+    assert bypass < full
 
 
 # ── summary reflects the resolved control state ─────────────────────────────
@@ -153,8 +139,9 @@ def test_island_external_load_in_summary():
 
 # ── audit composition checks present ────────────────────────────────────────
 
-def test_island_audit_includes_F1_F2_F3_F4():
-    """Island/auto: F1 (balance closed) + F2 + F3 + F4 + E9 = 5 composition checks."""
+def test_island_audit_includes_F1_F2_F3():
+    """Island/auto: E9 (bus closure) + F1 (balance closed) + F2 + F3
+    composition checks. F5 is grid-only."""
     import nexa_toolkit.engines                              # noqa: registers
     from nexa_toolkit.framework import get
     e = get("gt_system_v2")
@@ -165,7 +152,6 @@ def test_island_audit_includes_F1_F2_F3_F4():
     assert any(n.startswith("F1") for n in names)
     assert any(n.startswith("F2") for n in names)
     assert any(n.startswith("F3") for n in names)
-    assert any(n.startswith("F4") for n in names)
     assert not any(n.startswith("F5") for n in names)        # grid-only
 
 

@@ -23,11 +23,11 @@ from nexablock.studies            import (ParameterSweep, SweepResult,
 
 @pytest.fixture(scope="module")
 def base():
-    # Studies need manual modes so swept/perturbed inputs actually take
-    # effect — under auto, the controller overrides load_pct and libr_frac
-    # from the demand chain. Manual mode preserves the studies semantics.
-    return GTSystemParams(gt_power_mode="manual", steam_split_mode="manual",
-                          operating_mode="island")
+    # Studies need manual GT power so the swept/perturbed load_pct actually
+    # takes effect — under auto, the controller overrides load_pct from the
+    # demand chain. Manual mode preserves the studies semantics. (The steam
+    # splitter is gone; all steam → LiBr, MED is rejection-driven.)
+    return GTSystemParams(gt_power_mode="manual", operating_mode="island")
 
 
 @pytest.fixture(scope="module")
@@ -94,11 +94,11 @@ def test_unknown_param_raises(base):
 # ══════════════════════════════════════════════════════════════════════════════
 
 _BOUNDS = {
-    "load_pct":     (10.0, 100.0),
-    "libr_frac":    (0.05, 0.95),
-    "gt_eff":       (0.15, 0.45),
-    "hrsg_eff_pct": (50.0, 95.0),
-    "libr_cop":     (0.5,  0.85),
+    "load_pct":        (10.0, 100.0),
+    "med_bypass_frac": (0.0,  0.9),
+    "gt_eff":          (0.15, 0.45),
+    "hrsg_eff_pct":    (50.0, 95.0),
+    "libr_cop":        (0.5,  0.85),
 }
 
 _KPIS = [
@@ -118,7 +118,7 @@ def sens(base):
         step_override={"med_effects": 1.0},
     )
     return s.run(
-        inputs=["load_pct", "gt_eff", "libr_frac", "libr_cop",
+        inputs=["load_pct", "gt_eff", "med_bypass_frac", "libr_cop",
                 "hrsg_eff_pct", "med_effects", "t_ambient_C"],
         kpis  =_KPIS,
     )
@@ -155,9 +155,16 @@ def test_dWater_dMEDeffects_positive(sens):
     assert _e(sens, "MED water m3day", "med_effects").elasticity > 0
 
 
-def test_dWater_dLibrFrac_negative(sens):
-    """More steam to LiBr leaves less for MED."""
-    assert _e(sens, "MED water m3day", "libr_frac").elasticity < 0
+def test_dWater_dMEDbypass_negative(base):
+    """Routing rejection around MED leaves less captured heat → less water.
+    Evaluated at a non-zero base bypass so the elasticity is well defined
+    (at bypass=0 the relative perturbation is degenerate)."""
+    b = replace(base, med_bypass_frac=0.3)
+    s = OneAtATimeSensitivity(
+        builder=build_gt_system, base_params=b, kpi_fn=summary,
+        rel_step=0.01, bounds={"med_bypass_frac": (0.0, 0.9)})
+    r = s.run(inputs=["med_bypass_frac"], kpis=["MED water m3day"])
+    assert r.entries[0].elasticity < 0
 
 
 def test_dCool_dLibrCOP_positive(sens):
@@ -169,8 +176,9 @@ def test_dPower_dAmbient_negative(sens):
     assert _e(sens, "GT actual power kW", "t_ambient_C").elasticity < 0
 
 
-def test_dCool_dLibrFrac_positive(sens):
-    assert _e(sens, "LiBr cooling kW", "libr_frac").elasticity > 0
+def test_dCool_dHrsgEff_positive(sens):
+    """More HRSG effectiveness → more steam → more LiBr cooling."""
+    assert _e(sens, "LiBr cooling kW", "hrsg_eff_pct").elasticity > 0
 
 
 # ── magnitude sanity ─────────────────────────────────────────────────────────
@@ -209,8 +217,7 @@ def test_bounds_clamp_at_load_100():
     """Base load_pct=99.5 with bounds (10,100): high clamps to 100, low at ~98.5.
     span < 2h, dY/dX still finite. Manual modes so the load_pct override
     actually takes effect (auto would re-resolve from demand)."""
-    base = GTSystemParams(load_pct=99.5, gt_power_mode="manual",
-                          steam_split_mode="manual")
+    base = GTSystemParams(load_pct=99.5, gt_power_mode="manual")
     s = OneAtATimeSensitivity(
         builder=build_gt_system, base_params=base, kpi_fn=summary,
         rel_step=0.01, bounds={"load_pct": (10.0, 100.0)})
@@ -227,8 +234,8 @@ def test_bounds_clamp_at_load_100():
 # §7.8 — Scenarios
 # ══════════════════════════════════════════════════════════════════════════════
 
-_SUMMER = {"t_ambient_C": 40.0, "load_pct": 100.0, "t_wb_C": 30.0}
-_WINTER = {"t_ambient_C":  5.0, "load_pct":  40.0, "t_wb_C": 10.0}
+_SUMMER = {"t_ambient_C": 40.0, "load_pct": 100.0}
+_WINTER = {"t_ambient_C":  5.0, "load_pct":  40.0}
 
 
 @pytest.fixture(scope="module")
@@ -369,7 +376,8 @@ def test_tornado_drop_zero_filters_zero_elasticity_bars(sens):
     full   = _tornado_figure(sens, kpi="MED water m3day")
     pruned = _tornado_figure(sens, kpi="MED water m3day", drop_zero=True)
     try:
-        # libr_cop has ε=0 for MED water → pruned bar count drops by 1.
+        # med_bypass_frac has ε=0 for MED water at base bypass=0 → pruned
+        # bar count drops by 1.
         assert len(pruned.axes[0].patches) < len(full.axes[0].patches)
         assert len(pruned.axes[0].patches) >= 1
     finally:
@@ -410,7 +418,7 @@ def test_sweep_figure_subplots_gives_one_axes_per_kpi(load_sweep):
 
 def test_sweep_chart_2d_raises(base):
     sweep = ParameterSweep(build_gt_system, base, summary)
-    r2d   = sweep.run({"load_pct": [70, 90], "libr_frac": [0.3, 0.7]})
+    r2d   = sweep.run({"load_pct": [70, 90], "med_bypass_frac": [0.3, 0.7]})
     with pytest.raises(ValueError, match="1-D only"):
         _sweep_figure(r2d, kpis=["Steam generation t/h"])
 
@@ -439,11 +447,11 @@ def test_scenarios_figure_has_expected_bars(scenarios_result):
 
 def test_sweep_contour_renders_real_2d_grid(base, tmp_path):
     """sweep_contour now works on a 2D sweep result: 5×5 grid of (load_pct,
-    libr_frac) → MED water contour. Produces a valid PNG, file > 1 KB,
+    med_bypass_frac) → MED water contour. Produces a valid PNG, file > 1 KB,
     headers OK."""
     swp = ParameterSweep(build_gt_system, base, summary).run({
-        "load_pct":  [50, 60, 70, 80, 90],
-        "libr_frac": [0.3, 0.4, 0.5, 0.6, 0.7],
+        "load_pct":        [50, 60, 70, 80, 90],
+        "med_bypass_frac": [0.1, 0.2, 0.3, 0.4, 0.5],
     })
     p = tmp_path / "contour.png"
     sweep_contour(swp, str(p), kpi="MED water m3day")
