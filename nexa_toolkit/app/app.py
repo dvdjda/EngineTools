@@ -987,6 +987,33 @@ app.layout = html.Div([
                                            "background": "white", "color": NAVY,
                                            "border": f"1px solid {NAVY}"}),
                     ], style={"display": "flex", "alignItems": "center"}),
+                    # Range controls for the 1D X sweep: min · max · steps.
+                    # Auto-filled from the input's bounds when X is picked; edit
+                    # to control the swept range and resolution.
+                    html.Div([
+                        html.Span("Range", style={"fontSize": "11px", "fontWeight": "700",
+                                                  "color": NAVY, "marginRight": "8px"}),
+                        html.Span("min", style={"fontSize": "10px", "color": GREY,
+                                                "marginRight": "3px"}),
+                        dcc.Input(id="sweep-min", type="number", placeholder="min",
+                                  style={"width": "78px", "fontSize": "11px",
+                                         "padding": "5px 6px", "marginRight": "10px",
+                                         "border": f"1px solid {LINE}", "borderRadius": "6px"}),
+                        html.Span("max", style={"fontSize": "10px", "color": GREY,
+                                                "marginRight": "3px"}),
+                        dcc.Input(id="sweep-max", type="number", placeholder="max",
+                                  style={"width": "78px", "fontSize": "11px",
+                                         "padding": "5px 6px", "marginRight": "10px",
+                                         "border": f"1px solid {LINE}", "borderRadius": "6px"}),
+                        html.Span("steps", style={"fontSize": "10px", "color": GREY,
+                                                  "marginRight": "3px"}),
+                        dcc.Input(id="sweep-steps", type="number", value=10, min=2, step=1,
+                                  style={"width": "64px", "fontSize": "11px",
+                                         "padding": "5px 6px",
+                                         "border": f"1px solid {LINE}", "borderRadius": "6px"}),
+                        html.Span("(1D sweep)", style={"fontSize": "10px", "color": GREY,
+                                                       "marginLeft": "10px", "fontStyle": "italic"}),
+                    ], style={"display": "flex", "alignItems": "center", "marginTop": "8px"}),
                 ], style={"marginBottom": "10px"}),
 
                 # Scenarios — single button
@@ -1547,7 +1574,8 @@ def _png_data_uri(path: str) -> str:
 
 
 def _run_study(kind: str, data, *, sens_inputs=None, sens_kpis=None,
-               sweep_mode="1d", sweep_x=None, sweep_y=None, sweep_kpis=None):
+               sweep_mode="1d", sweep_x=None, sweep_y=None, sweep_kpis=None,
+               sweep_min=None, sweep_max=None, sweep_steps=None):
     """Build the appropriate study chart and return (chart_src, banner).
 
     Multi-select inputs / KPIs honoured for sensitivity. Sweep dispatches
@@ -1614,14 +1642,27 @@ def _run_study(kind: str, data, *, sens_inputs=None, sens_kpis=None,
                 chart_kwargs = {"kpi": z_kpi,
                                 "title": f"{z_kpi} over ({sweep_x}, {sweep_y})"}
             else:
-                N = 10
+                # User-controlled range: min · max · steps for the X input.
+                try:
+                    n = int(float(sweep_steps))
+                except (TypeError, ValueError):
+                    n = 10
+                n = max(2, min(n, 200))     # ≥2 points; cap so the solve stays sane
+                if sweep_min is not None and sweep_max is not None:
+                    lo, hi = float(sweep_min), float(sweep_max)
+                    if lo == hi:
+                        return no_update, _msg("Sweep min and max must differ.", RED)
+                    rng = [lo + (hi - lo) * i / (n - 1) for i in range(n)]
+                else:
+                    rng = _range(sweep_x, n)   # fall back to the input's bounds
+                lo, hi = rng[0], rng[-1]
                 swp = ParameterSweep(hooks["builder"], params, hooks["kpi_fn"]).run(
-                    {sweep_x: _range(sweep_x, N)})
-                sweep_chart(swp, p, kpis=list(sweep_kpis),
-                            title=f"Sweep over {sweep_x}", subplots=True)
-                label = f"1D sweep: {sweep_x} → {len(sweep_kpis)} KPIs"
+                    {sweep_x: rng})
+                title = f"Sweep over {sweep_x}  [{n} pts · {lo:g}–{hi:g}]"
+                sweep_chart(swp, p, kpis=list(sweep_kpis), title=title, subplots=True)
+                label = f"1D sweep: {sweep_x} {lo:g}→{hi:g} in {n} steps → {len(sweep_kpis)} KPIs"
                 chart_kwargs = {"kpis": list(sweep_kpis),
-                                "title": f"Sweep over {sweep_x}",
+                                "title": title,
                                 "subplots": True}
             study_result = swp
             banner = _msg(label, NAVY)
@@ -1684,11 +1725,35 @@ def _on_study_sens(_n, data, sens_inputs, sens_kpis):
               State("study-sweep-x",    "value"),
               State("study-sweep-y",    "value"),
               State("study-sweep-kpis", "value"),
+              State("sweep-min",   "value"),
+              State("sweep-max",   "value"),
+              State("sweep-steps", "value"),
               prevent_initial_call=True)
-def _on_study_sweep(_n, data, mode, sweep_x, sweep_y, sweep_kpis):
+def _on_study_sweep(_n, data, mode, sweep_x, sweep_y, sweep_kpis,
+                    sweep_min, sweep_max, sweep_steps):
     return _run_study("sweep", data, sweep_mode=mode,
                        sweep_x=sweep_x, sweep_y=sweep_y,
-                       sweep_kpis=sweep_kpis)
+                       sweep_kpis=sweep_kpis, sweep_min=sweep_min,
+                       sweep_max=sweep_max, sweep_steps=sweep_steps)
+
+
+@app.callback(Output("sweep-min", "value"),
+              Output("sweep-max", "value"),
+              Input("study-sweep-x", "value"),
+              State("system", "value"),
+              prevent_initial_call=True)
+def _sweep_range_defaults(sweep_x, engine_key):
+    """When the X input changes, pre-fill min/max from that input's bounds so the
+    user starts from a sensible range (they can override). Inputs without bounds
+    leave the fields as they are."""
+    if not sweep_x or not engine_key:
+        return no_update, no_update
+    _, hooks = _engine_hooks(engine_key)
+    bounds = (hooks or {}).get("bounds", {})
+    if sweep_x in bounds:
+        lo, hi = bounds[sweep_x]
+        return lo, hi
+    return no_update, no_update
 
 
 @app.callback(Output("chart", "src", allow_duplicate=True),
