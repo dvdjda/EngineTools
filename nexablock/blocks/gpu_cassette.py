@@ -121,6 +121,8 @@ class GPUCassette(Block):
                      "IT + cassette overhead — both dissipate into the coolant")
         self._result("Coolant mdot",    mdot,              "kg/s",  "verified")
         self._result("Coolant vol flow",vol_Lpm,           "L/min", "verified")
+        self._result("Coolant vol flow m3/h", vol_m3s * 3600.0, "m³/h", "verified",
+                     "dielectric coolant circulated through the GPU")
         self._result("Supply temp",     T_sup - 273.15,    "°C",    "input")
         self._result("Return temp",     T_ret - 273.15,    "°C",    "verified")
         self._result("ΔT coolant",      dt,                "K",     "input")

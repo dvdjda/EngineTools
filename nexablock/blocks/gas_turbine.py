@@ -98,7 +98,9 @@ class GasTurbine(Block):
         self._result("GT derated capacity", p_derate/1e3,    "kW", "verified")
         self._result("GT actual power",     p_gt/1e3,        "kW", "verified")
         self._result("GT aux electrical",   gt_aux_kW,       "kW", "screening",
-                     "aux_frac × derated capacity (screening)")
+                     "aux_frac × derated capacity (integral to the GT package)")
+        self._result("GT net power",        p_gt/1e3 - gt_aux_kW, "kW", "verified",
+                     "gross − GT auxiliaries (the net output to the bus)")
         self._result("Fuel energy input",   fuel_W/1e3,      "kW", "verified")
         self._result("NG consumption kg/h",  ng_kgps*3600,         "kg/h",  "verified")
         self._result("NG consumption Nm3/h", ng_kgps*3600/_NG_RHO, "Nm³/h", "verified")

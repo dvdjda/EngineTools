@@ -54,12 +54,12 @@ When you load the page, the layout is two columns:
 ## 3. The standard workflow
 
 1. **Pick an engine** in the system dropdown.
-2. **Adjust inputs** in the left column as needed. For the v2 GT system, the modes at the bottom (Operating mode, GT power control, Steam split control) decide how the controller behaves — see [`NEXA_SIMULATOR.md`](NEXA_SIMULATOR.md) §4.
+2. **Adjust inputs** in the left column as needed. For the v2 GT system, the modes at the bottom (Operating mode, GT power control) decide how the controller behaves — see [`NEXA_SIMULATOR.md`](NEXA_SIMULATOR.md) §4.
 3. **Click Run**. The right pane populates with status cards, the flowsheet, the highlights, and the full results table.
 4. **Read the three status cards** to know whether the result is trustworthy:
    - Convergence card must be green.
    - Every Feasibility card must be green (Power AND Cooling capacity for the v2 GT system).
-   - Audit card must be green (39 block checks + 5 composition checks in island/auto mode).
+   - Audit card must be green (42 checks total in island/auto or grid/auto mode; 41 in fully-manual GT-power mode).
 5. **Drive a study** if you want to learn the system's dynamics — sensitivity (multi-select inputs and KPIs), sweep (1D or 2D), or scenarios. See §5.
 6. **Download a report** (PDF / Excel) when you have something to share. Tick "Include latest study" to attach the most recent study chart to the report.
 
@@ -71,9 +71,18 @@ The two GT engines (`gt_system_v2`, `gt_system_v2_loadsweep`) show a **GT load (
 - Edit **kW** → the % field updates.
 - Edit **GT rated power** or **Ambient temperature** → the kW re-derives at the held %.
 
-The conversion is on the **actual-power (derated) basis**: `kW = derated capacity × load% ÷ 100`, where `derated = rated power × max(0.50, 1 − 0.007·max(0, T_amb − 15 °C))` — the same ambient-derating law the GasTurbine block uses ([`NEXA_SIMULATOR.md`](NEXA_SIMULATOR.md) §3.1). So the kW shown equals the **GT actual power** the engine reports when GT power control is **Manual**. If you type a kW that implies a load outside the 10–100 % envelope, the % clamps and the kW snaps back to the consistent value.
+The conversion is on the **actual-power (derated) basis**: `kW = derated capacity × load% ÷ 100`, where the derate is `max(0.50, 1 − 0.007·max(0, T_amb − 15 °C))` (see [`NEXA_SIMULATOR.md`](NEXA_SIMULATOR.md) §3.1). So the kW shown equals the **GT actual power** the engine reports when GT power control is **Manual**. If you type a kW that implies a load outside the 10–100 % envelope, the % clamps and the kW snaps back to the consistent value.
 
 Note: in **Auto** GT power mode the controller derives `load_pct` itself, so both the % input and this kW twin are inert at solve time (the actual operating point appears in the results as `GT load_pct (auto-derived)`).
+
+### 3.2 The plant-electrical and cooling-loop inputs (GT system)
+
+The v2 GT system input list (auto-generated from the engine's `InputSpec`s) includes:
+
+- **Dielectric coolant** fields — **GPU coolant T_in / T_out** (default 30°C → 42°C), **Dielectric coolant cp** (2100 J/kg·K) and **density** (780 kg/m³). This is the immersion fluid, not chilled water.
+- **LiBr rejection temperature** (`libr_reject_t_C`, default 95°C) and **HRSG feedwater / loop return set-point** (`fw_t_C`, default 80°C) — the hot and cold ends of the cooling-water loop.
+- **MED bypass (manual, 0–1)** — the 3-way valve fraction routing rejection heat around MED. **Radiator approach to ambient** (default 15 K) — the dry-cooler cold-branch approach.
+- **Plant-electrical (aux) model** — itemised, IT/flow-driven: **GT aux fraction** (internal derate → GT net), **Pump efficiency** (all pumps), the pump heads **Dielectric coolant loop head**, **Cooling-water loop head**, **HRSG feed-water pump head**, **Seawater / MED pump head** (one knob drives all the ~2-bar desal/condensate pumps), the **Dry-cooler fan at full duty** fraction (VSD cube law), and the container-envelope HVAC set **40' containers per MW IT**, **Container external area**, **Envelope U-value**, **Container inside set-point**, **Lights (fraction of HVAC)**.
 
 ## 4. Reading the status cards
 
@@ -95,8 +104,8 @@ The v2 GT system carries two resource balances:
 
 | Resource | Supply | Demand | When it goes red |
 |---|---|---|---|
-| **Power** | GT derated capacity (the ambient-corrected ceiling, NOT the actual operating point) | GPU silicon + cassette overhead + plant aux + (island) external load | Demand > derated capacity, or (grid mode) export-only would have to import. |
-| **Cooling capacity** | LiBr Q_cool | GPU silicon heat + cassette overhead heat | LiBr undersized for the GPU heat dump. |
+| **Power** | **GT net power** (gross − GT aux; GT aux is an internal derate, so the bus sees net) | GPU silicon + cassette overhead + itemised plant aux + (island) external load OR (grid) grid export | The bus doesn't close within 2.5 %: a deficit, or (island) a surplus with nowhere to go, or (grid mode) export-only would have to import. |
+| **Cooling capacity** | LiBr Q_cool | GPU silicon heat + cassette overhead heat | LiBr undersized for the GPU heat dump (gap beyond the 2.5 % screening tolerance). |
 
 Each card shows:
 - Supply · Demand · Balance · (when red) shortfall
@@ -105,7 +114,7 @@ Each card shows:
 
 ### 4.3 Audit card
 
-The post-solve audit runs 44 checks in island/auto mode (or 42 in fully-manual, or 44 in grid/auto). When everything passes you get a single green line; when something fails, a red block lists every failed check with category, name, and detail.
+The post-solve audit runs 42 checks in island/auto and grid/auto mode (41 in fully-manual GT-power mode — the F3 derived-load_pct check only exists in auto). When everything passes you get a single green line; when something fails, a red block lists every failed check with category, name, and detail.
 
 Categories: **Energy closure**, **Mass closure**, **Second law**, **Plausibility**. See [`NEXA_SIMULATOR.md`](NEXA_SIMULATOR.md) §6 for the full check list.
 
@@ -141,7 +150,7 @@ Pick **1D** or **2D** with the radio at the top of the row.
 **1D mode**:
 - One **X axis** dropdown (which input to vary).
 - One **KPIs to plot** multi-select (which outputs to track).
-- The X dropdown shows the curated `sweep_inputs` list (includes `gpu_it_kW`, `external_load_kW`, `t_ambient_C`, plus the GT/HRSG/LiBr/MED knobs).
+- The X dropdown shows the curated `sweep_inputs` list (`load_pct`, `gt_eff`, `libr_cop`, `libr_reject_t_C`, `hrsg_eff_pct`, `med_bypass_frac`, `t_ambient_C`, `gpu_it_kW`, `external_load_kW`).
 - Chart: stacked subplots, one per KPI, sharing the X axis. Each KPI gets its own y-scale so small-magnitude lines (steam t/h next to GT kW) stay visible.
 
 **2D mode**:
@@ -195,6 +204,6 @@ Both honour the basis colours from the Results table. Both fail loud — neither
 
 - **Port 8050 already in use** → `./stop.sh` first; check `enginetools.pid` for a stale PID file.
 - **"This engine doesn't expose study_hooks"** in the banner → the picked engine is a v1 entry without the v2 hook. Switch to the v2 GT entry.
-- **Audit shows M7 failure at island/auto defaults** → expected. Island mode caps GT load by electrical demand; if GPU heat at that load can't be cooled, M7 sufficiency fails. Either raise external load, switch to grid mode, or pick manual modes with a higher `load_pct`.
+- **Audit shows M7 failure (and a red Cooling card) at island/auto defaults** → expected. Island mode caps GT load by electrical demand; at the GPU-5-MW defaults the electrically-pinned GT raises only enough steam for ~5 072 kW of LiBr cooling against a 5 250 kW demand (~3.4 % short, beyond the 2.5 % screening tolerance), so M7 (coolant inlet supply ≥ cassette demand) fails and 41/42 checks pass. Either raise external load, switch to grid mode (which ramps the GT for full cooling and is clean), or pick manual GT-power with a higher `load_pct`.
 - **PDF builds slowly** → cairosvg rasterises the SVG flowsheet at 1600 px wide. Acceptable for screening; future speed-up is on the list.
 - **Inputs row reads "Operating mode  (-)"** → already fixed. If you see this again, the dimensionless-unit suppression in `input_fields` regressed.

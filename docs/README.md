@@ -27,9 +27,9 @@ For the v2 trusted GT system, pick **"GT System v2 — nexablock"** in the syste
 
 Every Run shows three independent status cards above the chart:
 
-- **Convergence** — green ✓ if the solver loops settled, red ⚠ NOT CONVERGED if they didn't. Acyclic systems read "converged (no recycle loops)".
-- **Feasibility** — one card per resource balance (Power, Cooling capacity). Each is green ✓ when supply ≥ demand, red ⚠ DEFICIT otherwise.
-- **Audit** — green ✓ N/N when every post-solve check (39 + composition extras = 44 in island/auto mode) passes, red ⚠ AUDIT FAILED otherwise with the list of failed checks.
+- **Convergence** — green ✓ if the solver loops settled, red ⚠ NOT CONVERGED if they didn't. The GT system has one real recycle loop (the GPU↔LiBr dielectric coolant loop), torn and Wegstein-converged; the card reads "converged in N iterations".
+- **Feasibility** — one card per resource balance (Power, Cooling capacity). Each is green ✓ when supply ≥ demand within tolerance, red ⚠ DEFICIT otherwise.
+- **Audit** — green ✓ N/N when every post-solve check (42 in island/auto or grid/auto mode, 41 fully-manual) passes, red ⚠ AUDIT FAILED otherwise with the list of failed checks.
 
 Per-KPI basis (the colour of the Basis column in the Results table) is now data-driven from audit coverage: a KPI vouched for by a passing check shows the engine-declared basis (typically `verified`); a KPI named by any failed check goes `unverified` (red); a KPI no check covers goes `screening` (amber).
 

@@ -263,14 +263,17 @@ def test_xlsx_high_gpu_load_shows_both_deficits(engine, hooks, tmp_path):
     assert "Assumption"                in joined
     assert "immersion"                 in joined.lower()
     assert "unverified"                in joined
-    for line in ("LiBr pump electrical",
-                 "Radiator fan electrical",
-                 "GT auxiliaries",
-                 "Plant BoP",
+    for line in ("Dielectric coolant pump",        # itemised plant aux
+                 "Cooling-loop pump",
+                 "HRSG feed-water pump",
+                 "Dry-cooler fan (VSD)",
+                 "HVAC (containers)",
+                 "Lights",
                  "LiBr cooling capacity",
                  "GPU silicon heat",
                  "Cassette overhead",
-                 "GT actual power (supply)",
+                 "GT net power (supply)",
+                 "GT gross power",
                  "Derated capacity (max available)"):
         assert line in joined, f"line {line!r} missing"
     # GT v2 now has the dielectric-coolant recycle loop, so it converges via
@@ -281,8 +284,8 @@ def test_xlsx_high_gpu_load_shows_both_deficits(engine, hooks, tmp_path):
 def test_xlsx_gpu_10mw_shows_cooling_deficit(engine, tmp_path):
     """At GPU 10 MW the cooling shortfall is ~20% — well above the 2.5%
     screening tolerance, so a real DEFICIT bar is rendered. (At default
-    GPU 5 MW the gap is 1.9% — within tolerance — and the report does
-    NOT show a deficit; see test_xlsx_balanced_design_no_deficits.)"""
+    GPU 5 MW the island gap is ~3.4% — just past tolerance — so the default
+    island report now shows a small cooling deficit too; grid mode is clean.)"""
     v = engine.defaults(); v["gpu_it_kW"] = 10000.0
     r = engine.solve(v)
     p = tmp_path / "gpu10_cooling_deficit.xlsx"

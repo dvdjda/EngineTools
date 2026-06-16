@@ -139,30 +139,30 @@ def _make(resource, unit, supply, demand, assumption, breakdown, *,
 
 def power_balance(solved, assumption: str | None = None,
                   bop_frac: float = 0.010) -> ResourceBalance:
-    """Electrical supply/demand.
+    """Electrical supply/demand on the bus.
 
-    Supply: GT *derated* capacity (the ambient-corrected ceiling — what the
-            GT can deliver at full load), not the current operating point.
-    Demand: GPU silicon + cassette overhead + itemised plant aux
-            (MED pumps, LiBr pumps, CT fans, GT aux, plant BoP).
+    Supply: GT *net* power = gross − GT auxiliaries. GT aux is the package's
+            own parasitic (an internal de-rate), so it never appears on the
+            bus — the bus sees the net output only.
+    Demand: GPU silicon + cassette overhead + the itemised plant electrical
+            from `plant_loads` (each pump P=Q·ΔP/η, the VSD dry-cooler fan,
+            container HVAC, lights).
     """
-    gt   = _first(solved, GasTurbine)
-    gpu  = _first(solved, GPUCassette)
-    med  = _first(solved, MED)
-    libr = _first(solved, LiBrChiller)
-    ct   = _first(solved, Radiator)
+    from .plant_loads import plant_loads
+    gt  = _first(solved, GasTurbine)
+    gpu = _first(solved, GPUCassette)
 
     derated_kW = _read(gt, "GT derated capacity")            # info only
-    actual_kW  = _read(gt, "GT actual power")                # SUPPLY — what GT really produces
+    gross_kW   = _read(gt, "GT actual power")                # info only
+    gt_aux_kW  = _read(gt, "GT aux electrical")              # internal derate
+    net_kW     = _read(gt, "GT net power")                   # SUPPLY to the bus
 
-    silicon_kW   = _read(gpu, "IT power")
-    overhead_kW  = _read(gpu, "Cassette overhead electrical")
+    silicon_kW  = _read(gpu, "IT power")
+    overhead_kW = _read(gpu, "Cassette overhead electrical")
 
-    med_aux_kW  = _read(med,  "MED electrical")
-    libr_aux_kW = _read(libr, "LiBr pump electrical")
-    ct_aux_kW   = _read(ct,   "Radiator fan electrical")
-    gt_aux_kW   = _read(gt,   "GT aux electrical")
-    bop_aux_kW  = max(0.0, bop_frac) * actual_kW
+    p  = getattr(solved, "params", None)
+    pl = plant_loads(solved, p) if p is not None else {"items": {}, "total": 0.0}
+    plant_total = pl["total"]
 
     cs = getattr(solved, "control", None)
     operating_mode = getattr(solved, "operating_mode", "island")
@@ -173,24 +173,19 @@ def power_balance(solved, assumption: str | None = None,
         assumption = (POWER_ASSUMPTION_GRID if operating_mode == "grid_tied"
                        else POWER_ASSUMPTION_ISLAND)
 
-    nexa_demand = (silicon_kW + overhead_kW + med_aux_kW + libr_aux_kW
-                   + ct_aux_kW + gt_aux_kW + bop_aux_kW)
+    nexa_demand = silicon_kW + overhead_kW + plant_total
 
-    # Breakdown reflects the bus equation:
-    #   SUPPLY (positive)  =  GT actual
-    #   DEMAND (negative)  =  every consumer
-    # In grid mode, "Grid export" is one of the consumers (positive value).
+    # Breakdown reflects the bus equation: SUPPLY = GT net; DEMAND = consumers.
+    # GT gross + GT aux are shown as info (the derate that produced net).
     breakdown = {
-        "GT actual power (supply)":        +actual_kW,
-        "Derated capacity (max available)": derated_kW,   # info only
-        "GPU silicon (IT power)":          silicon_kW,
-        "Cassette overhead (pumps/ctl)":   overhead_kW,
-        "MED electrical (pumps)":          med_aux_kW,
-        "LiBr pump electrical":            libr_aux_kW,
-        "Radiator fan electrical":         ct_aux_kW,
-        "GT auxiliaries":                  gt_aux_kW,
-        "Plant BoP (lights/HVAC)":         bop_aux_kW,
+        "GT net power (supply)":            +net_kW,
+        "GT gross power":                    gross_kW,        # info only
+        "GT auxiliaries (internal derate)":  gt_aux_kW,       # info only
+        "Derated capacity (max available)":  derated_kW,      # info only
+        "GPU silicon (IT power)":            silicon_kW,
+        "Cassette overhead (pumps/ctl)":     overhead_kW,
     }
+    breakdown.update(pl.get("items", {}))                     # itemised plant aux
     if operating_mode == "island":
         breakdown["External load (island, manual)"] = external_load_kW
         demand_kW = nexa_demand + external_load_kW
@@ -199,7 +194,7 @@ def power_balance(solved, assumption: str | None = None,
         demand_kW = nexa_demand + grid_export_kW
 
     # closure=True so BOTH excess and deficit flag (bus must close).
-    return _make("Power", "kW", actual_kW, demand_kW, assumption, breakdown,
+    return _make("Power", "kW", net_kW, demand_kW, assumption, breakdown,
                   tol_rel=POWER_TOL_REL, closure=True)
 
 

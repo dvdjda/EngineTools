@@ -110,14 +110,27 @@ def test_audit_category_counts(default_audit):
     assert len(by_cat["Plausibility"])   == 16
 
 
-def test_default_audit_passes_within_screening_tolerance(default_audit):
-    """At island/auto defaults (GPU 5 MW) the GT is electrically pinned
-    to ~61% load. Steam at that load delivers ~1.9% less cooling than
-    GPU heat — within the 2.5% screening tolerance the framework treats
-    as controller-vs-block precision noise. Audit reads clean. The same
-    audit will fail loud at GPU ≥ ~8 MW (real deficit)."""
-    assert default_audit.passed
-    assert len(default_audit.failed()) == 0
+def test_default_audit_flags_electrically_pinned_cooling_gap(default_audit):
+    """At island/auto defaults (GPU 5 MW) the GT is electrically pinned to
+    ~60% load. With the itemised (lower) plant-aux model the GT runs cooler,
+    so steam delivers ~3.4% less cooling than GPU heat — just past the 2.5%
+    screening tolerance. The M7 coolant-flow check is the one that flags;
+    everything else (energy/mass closure, second law, bus closure F1) passes."""
+    failed = default_audit.failed()
+    assert [c.name.split(":")[0] for c in failed] == ["M7"], \
+        f"expected only M7 to fail, got {[c.name for c in failed]}"
+    assert not default_audit.passed
+
+
+def test_grid_default_audit_clean():
+    """Grid mode at defaults: GT ramps to cool the GPU and exports surplus,
+    so there is no cooling deficit — the audit reads fully clean."""
+    import nexa_toolkit.engines                              # noqa
+    from nexa_toolkit.framework import get
+    e = get("gt_system_v2")
+    v = e.defaults(); v["operating_mode"] = 1                # grid_tied
+    a = e.solve(v)["audit"]
+    assert a.passed, f"failures: {[c.name for c in a.failed()]}"
 
 
 def test_audit_fails_loud_when_real_deficit_present():

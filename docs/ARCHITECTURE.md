@@ -12,7 +12,7 @@ For the user-facing simulator description, see [`NEXA_SIMULATOR.md`](NEXA_SIMULA
 EngineTools/
 ├── nexablock/           ← v2 framework. Physics, solver, audit, studies.
 │   ├── core/            ← Block, System, Solver, Stream, Port, convergence.
-│   ├── blocks/          ← The 7 GT-system blocks (+ Recycle).
+│   ├── blocks/          ← Process blocks. The GT system uses 6: GasTurbine, HRSG, LiBrChiller, GPUCassette, MED, Radiator (+ Recycle tear). SteamSplitter/CoolingTower files exist but are unused by gt_system.
 │   ├── audit/           ← CheckResult, AuditStatus, audit(), helpers.
 │   ├── studies/         ← Sweep, Sensitivity, Scenarios, charts.
 │   ├── viz/             ← SVG flowsheet renderer (§7.5).
@@ -28,7 +28,7 @@ EngineTools/
 │   ├── engines/         ← Engine adapters (gt_system_v2, gpu_cassette, ...).
 │   ├── reporting/       ← PDF, Excel, chart, study_export, pfd_page (landscape PFD).
 │   └── app/             ← The Dash UI (app.py).
-└── tests/               ← 176 tests across the whole stack.
+└── tests/               ← 180 tests across the whole stack.
 ```
 
 **Why two packages?** The v1 `nexa_toolkit` predates the v2 framework. It hosts the UI, the reporting layer, the drafts directory (where Cody scaffolds new tools), and the old standalone engines. The v2 `nexablock` is the "real" engineering framework — blocks, system composition, solver, audit. The v2 engines (`gt_system_v2`, `gt_system_v2_loadsweep`) live in `nexa_toolkit/engines/` and **adapt** the v2 framework to the v1 `Engine` contract so the v1 UI can drive it.
@@ -151,7 +151,7 @@ class GTSystemV2(Engine):
     name         = "GT System v2 — nexablock (...)"
     status       = "trusted"
     chart_format = "svg"        # tells the UI to render the SVG flowsheet
-    inputs       = [InputSpec(...), ...]    # 22 input fields
+    inputs       = [InputSpec(...), ...]    # 39 input fields
 
     def solve(self, v):                     # → r dict
         params = _params_from(v)
@@ -336,4 +336,4 @@ def my_system_audit_checks(solved) -> list:
 - `tests/test_audit.py`, `tests/test_studies.py` — Updated for the screening-tolerance concept on cooling and M7.
 - `tests/test_datasets.py` — The named-input-dataset store: save/update/delete/load, sorting, per-engine isolation, on-disk persistence, corrupt-file tolerance, filename-safety.
 
-Run all with `python -m pytest tests/ -q`. Current count: **176 / 176 green**. v2 promotion stays 14 / 14 ±2 % across every refactor.
+Run all with `python -m pytest tests/ -q`. Current count: **180 / 180 green**. v2 promotion stays 14 / 14 ±2 % across every refactor.

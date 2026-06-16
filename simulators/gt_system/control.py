@@ -34,6 +34,29 @@ _NG_LHV   = 50_050e3     # J/kg
 _EXH_FRAC = 0.85         # exhaust share of waste heat (matches GasTurbine block)
 
 
+def med_loop_cold_C(p) -> float:
+    """The temperature MED cools the captured loop branch down to.
+    Manual: the HRSG return set-point (fw_t_C) — MED never over-cools.
+    Auto:   MED's real cold-end (seawater + pinch), which is below the set-point,
+            so the bypass has to hold the return up to fw_t_C."""
+    if getattr(p, "med_bypass_mode", "manual") == "auto":
+        return p.sw_t_C + getattr(p, "med_cold_pinch_K", 15.0)
+    return p.fw_t_C
+
+
+def med_bypass_fraction(p) -> float:
+    """Resolved MED 3-way bypass. Manual: the user value. Auto: the fraction
+    that, blending the MED-cooled branch (at the cold-end) with the bypassed hot
+    branch (at the LiBr rejection temp), brings the loop back to the HRSG return
+    set-point fw_t_C — so the feedwater inlet holds set-point and the radiator
+    idles. Prioritises MED capture (water); opens only as far as needed."""
+    if getattr(p, "med_bypass_mode", "manual") != "auto":
+        return min(1.0, max(0.0, p.med_bypass_frac))
+    t_cold = med_loop_cold_C(p)
+    denom  = max(1.0, p.libr_reject_t_C - t_cold)
+    return min(1.0, max(0.0, (p.fw_t_C - t_cold) / denom))
+
+
 @dataclass
 class ControlSetpoints:
     """Resolved control variables + diagnostic context."""
@@ -101,37 +124,68 @@ def _libr_steam_demand_kgps(p, gpu_heat_kW: float) -> float:
     return q_gen_W / dh_libr                                 # kg/s
 
 
+def _pump_kW(q_m3h: float, dp_bar: float, eta: float) -> float:
+    if q_m3h <= 0 or dp_bar <= 0:
+        return 0.0
+    return (q_m3h / 3600.0) * (dp_bar * 1e5) / max(eta, 1e-3) / 1000.0
+
+
 def _aux_loads_kW(p, load_pct: float,
                   total_steam_kgps: float, gpu_heat_kW: float) -> dict:
-    """Per-block aux electrical at the given load_pct. Mirrors the block-level
-    formulas so the controller's setpoint matches what the real solve will see.
-    No steam splitter — all steam → LiBr; MED is rejection-driven."""
-    derate    = max(0.50, 1.0 - 0.007 * max(0.0, (p.t_ambient_C + 273.15) - 288.15))
-    p_derate  = p.p_rated_kW * derate
-    p_gt      = p_derate * load_pct / 100.0
-    gt_aux    = p.gt_aux_frac * p_derate
-    bop_aux   = p.bop_frac    * p_gt
+    """Plant electrical aux at the given load_pct — the analytical mirror of
+    `plant_loads.plant_loads` (pumps P=Q·ΔP/η, VSD fan, container HVAC, lights),
+    so the controller's setpoint matches what the real solve will compute.
+    GT aux is the internal GT de-rate (kept separate). No steam splitter — all
+    steam → LiBr; MED is rejection-driven."""
+    derate   = max(0.50, 1.0 - 0.007 * max(0.0, (p.t_ambient_C + 273.15) - 288.15))
+    p_derate = p.p_rated_kW * derate
+    gt_aux   = p.gt_aux_frac * p_derate
+    eta      = p.pump_eta
+
     # Cooling chain — LiBr delivers ~GPU heat; rejection = Q_cond.
-    q_cool    = gpu_heat_kW
-    libr_aux  = p.libr_pump_frac * q_cool
-    q_cond    = q_cool * (1.0 + p.libr_cop) / max(p.libr_cop, 1e-6)
-    f         = min(1.0, max(0.0, p.med_bypass_frac))
-    # Radiator rejects only the MED-bypassed share of Q_cond.
-    rad_aux   = p.ct_fan_frac * f * q_cond
-    # MED — rejection-driven: captures (1−bypass) of Q_cond → water → pump aux.
+    q_cool = gpu_heat_kW
+    q_cond = q_cool * (1.0 + p.libr_cop) / max(p.libr_cop, 1e-6)
+    f      = med_bypass_fraction(p)
+
+    # ── flows (m³/h), mirroring the block formulas ────────────────────────────
+    cp_w    = 4187.0
+    dt_diel = max(0.1, p.gpu_t_out_C - p.gpu_t_in_C)
+    q_diel  = gpu_heat_kW * 1e3 / (p.coolant_cp * dt_diel) / p.coolant_rho * 3600.0
+    loop_dt = max(1.0, p.libr_reject_t_C - p.fw_t_C)
+    q_loop  = (q_cond * 1e3 / (cp_w * loop_dt)) / 1000.0 * 3600.0
+    q_fw    = total_steam_kgps * 3.6
+    refrig  = q_cool * 1e3 / 2480e3                          # LiBr refrigerant kg/s
+    q_libr  = p.libr_circ_ratio * refrig / 1500.0 * 3600.0
     gor       = 0.8 * p.med_effects
     h_fg      = 2257.0                                       # kJ/kg
     q_med_kW  = (1.0 - f) * q_cond
     mdot_dist = gor * q_med_kW / h_fg                        # kg/s
-    m3pd      = mdot_dist * 86400.0 / 1000.0
-    med_aux   = 1.5 * m3pd / 24.0                            # kWh/m³ × m³/h
+    mdot_sw   = mdot_dist / 0.35                             # MED recovery 35%
+    mdot_br   = mdot_sw - mdot_dist
+    q_dist, q_sw, q_br = mdot_dist * 3.6, mdot_sw * 3.6, mdot_br * 3.6
+
+    pumps = (_pump_kW(q_diel, p.dp_diel_bar, eta)
+             + _pump_kW(q_libr, p.dp_libr_bar, eta)
+             + _pump_kW(q_loop, p.dp_loop_bar, eta)
+             + _pump_kW(q_fw,   p.dp_bfp_bar, eta)
+             + _pump_kW(q_sw,   p.dp_sw_bar, eta)
+             + _pump_kW(q_sw,   p.dp_med_feed_bar, eta)
+             + _pump_kW(q_br,   p.dp_brine_bar, eta)
+             + _pump_kW(q_dist, p.dp_dist_bar, eta)
+             + _pump_kW(q_fw,   p.dp_cond_bar, eta))         # condensate ≈ steam mass
+
+    # Dry-cooler fan: VSD cube law on radiator utilisation ≈ bypassed share.
+    fan = p.fan_rated_frac * q_cond * f ** 3
+    # Container-envelope HVAC + lights (IT/ambient driven).
+    n_cont = p.containers_per_MW * (p.gpu_it_kW / 1000.0)
+    hvac   = max(0.0, n_cont * p.container_area_m2 * p.container_U
+                 * (p.t_ambient_C - p.container_inside_C)) / 1000.0
+    lights = p.lights_frac * hvac
+
     return {
-        "gpu_kW":   gpu_heat_kW,                              # GPU electrical = GPU heat (immersion)
-        "med":      med_aux,
-        "libr":     libr_aux,
-        "ct":       rad_aux,
-        "gt_aux":   gt_aux,
-        "bop":      bop_aux,
+        "gpu_kW": gpu_heat_kW,          # GPU electrical = GPU heat (immersion)
+        "plant":  pumps + fan + hvac + lights,
+        "gt_aux": gt_aux,
     }
 
 
@@ -161,9 +215,9 @@ def control_setpoints(p, max_iter: int = 8,
     for iters in range(1, max_iter + 1):
         total_steam = _hrsg_steam_kgps(p, load_pct, t_amb_K)
         aux = _aux_loads_kW(p, load_pct, total_steam, gpu_heat_kW)
-        # Electrical demand (NEXA + island external)
-        elec_demand = (gpu_heat_kW + aux["med"] + aux["libr"]
-                       + aux["ct"] + aux["gt_aux"] + aux["bop"])
+        # Electrical demand (NEXA + island external). Gross GT must cover the
+        # bus (GPU + plant aux) PLUS the GT's own aux derate, so net = bus.
+        elec_demand = aux["gpu_kW"] + aux["plant"] + aux["gt_aux"]
         if p.operating_mode == "island":
             elec_demand += p.external_load_kW
         required_load_for_elec_pct = elec_demand / max(p_derate, 1e-9) * 100.0
@@ -185,8 +239,7 @@ def control_setpoints(p, max_iter: int = 8,
     final_total_steam = _hrsg_steam_kgps(p, load_pct, t_amb_K)
     final_aux = _aux_loads_kW(p, load_pct, final_total_steam, gpu_heat_kW)
     p_gt_kW = p_derate * load_pct / 100.0
-    nexa_demand = (gpu_heat_kW + final_aux["med"] + final_aux["libr"]
-                   + final_aux["ct"] + final_aux["gt_aux"] + final_aux["bop"])
+    nexa_demand = final_aux["gpu_kW"] + final_aux["plant"] + final_aux["gt_aux"]
     if p.operating_mode == "grid_tied":
         grid_export = max(0.0, p_gt_kW - nexa_demand)
         external_load = 0.0           # no manual external load in grid mode

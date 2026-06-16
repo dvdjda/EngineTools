@@ -63,6 +63,25 @@ def _params_from(v: dict) -> GTSystemParams:
         libr_pump_frac = float(v.get("libr_pump_frac", 0.015)),
         ct_fan_frac    = float(v.get("ct_fan_frac",    0.015)),
         bop_frac       = float(v.get("bop_frac",       0.010)),
+        # Plant-electrical model (IT/flow-driven): pump heads/η, fan, HVAC envelope.
+        pump_eta          = float(v.get("pump_eta",          0.70)),
+        dp_diel_bar       = float(v.get("dp_diel_bar",       1.5)),
+        dp_loop_bar       = float(v.get("dp_loop_bar",       3.0)),
+        dp_bfp_bar        = float(v.get("dp_bfp_bar",        9.0)),
+        # One "Seawater / MED pump head" knob drives all the low-head desal +
+        # condensate-return pumps (seawater intake, MED feed, brine, distillate,
+        # condensate) — they share the same ~2-bar duty.
+        dp_sw_bar         = float(v.get("dp_sw_bar",         2.0)),
+        dp_med_feed_bar   = float(v.get("dp_sw_bar",         2.0)),
+        dp_brine_bar      = float(v.get("dp_sw_bar",         2.0)),
+        dp_dist_bar       = float(v.get("dp_sw_bar",         2.0)),
+        dp_cond_bar       = float(v.get("dp_sw_bar",         2.0)),
+        fan_rated_frac    = float(v.get("fan_rated_frac",    0.015)),
+        containers_per_MW = float(v.get("containers_per_MW", 3.0)),
+        container_area_m2 = float(v.get("container_area_m2", 70.0)),
+        container_U       = float(v.get("container_U",       0.5)),
+        container_inside_C= float(v.get("container_inside_C",27.0)),
+        lights_frac       = float(v.get("lights_frac",       0.25)),
         operating_mode    = _MODE_NUM_TO_OP.get(int(v.get("operating_mode",    0)), "island"),
         gt_power_mode     = _MODE_NUM_TO_GTP.get(int(v.get("gt_power_mode",    0)), "auto"),
         external_load_kW  = float(v.get("external_load_kW", 0.0)),
@@ -94,8 +113,8 @@ class GTSystemV2(Engine):
         InputSpec("steam_p_bar",  "Steam pressure",         "bar", 10.0,      1,      40),
         InputSpec("fw_t_C",       "HRSG feedwater / loop return set-point", "°C", 80.0, 20, 150),
         InputSpec("libr_cop",     "LiBr COP",               "-",   0.70,      0.5,    0.85),
-        InputSpec("gpu_t_in_C",   "GPU coolant T_in (dielectric)",  "°C", 7.0,  2,  20),
-        InputSpec("gpu_t_out_C",  "GPU coolant T_out (dielectric)", "°C", 13.0, 4,  30),
+        InputSpec("gpu_t_in_C",   "GPU coolant T_in (dielectric)",  "°C", 30.0, 5,  45),
+        InputSpec("gpu_t_out_C",  "GPU coolant T_out (dielectric)", "°C", 42.0, 10, 60),
         InputSpec("coolant_cp",   "Dielectric coolant cp",    "J/(kg·K)", 2100.0, 1000, 4500),
         InputSpec("coolant_rho",  "Dielectric coolant density", "kg/m³",  780.0,  600,  1800),
         InputSpec("libr_reject_t_C", "LiBr rejection temperature", "°C", 95.0, 60, 130),
@@ -105,11 +124,23 @@ class GTSystemV2(Engine):
         InputSpec("sw_t_C",       "Seawater temp",          "°C",  28.0,      0,      45),
         InputSpec("med_bypass_frac", "MED bypass (manual, 0–1)", "-", 0.0, 0.0, 1.0),
         InputSpec("radiator_approach_K", "Radiator approach to ambient", "K", 15.0, 3, 30),
-        # Plant aux electrical load fractions (screening defaults; tune for site)
+        # Plant-electrical model (IT/flow-driven). GT aux is the GT package's
+        # own parasitic — an internal de-rate (GT net = gross − GT aux).
         InputSpec("gt_aux_frac",    "GT aux fraction (of derated cap)",      "-", 0.010, 0.0, 0.05),
-        InputSpec("libr_pump_frac", "LiBr pump fraction (of cooling)",       "-", 0.015, 0.0, 0.05),
-        InputSpec("ct_fan_frac",    "Radiator fan fraction (of rejected heat)", "-", 0.015, 0.0, 0.10),
-        InputSpec("bop_frac",       "Plant BoP fraction (lights/HVAC, of GT)","-", 0.010, 0.0, 0.05),
+        # Pumps: each P = Q·ΔP / η. Heads in bar; η shared across all pumps.
+        InputSpec("pump_eta",       "Pump efficiency (all pumps)",           "-", 0.70, 0.30, 0.90),
+        InputSpec("dp_diel_bar",    "Dielectric coolant loop head",          "bar", 1.5, 0.5, 8.0),
+        InputSpec("dp_loop_bar",    "Cooling-water loop head",               "bar", 3.0, 0.5, 8.0),
+        InputSpec("dp_bfp_bar",     "HRSG feed-water pump head",             "bar", 9.0, 1.0, 30.0),
+        InputSpec("dp_sw_bar",      "Seawater / MED pump head",              "bar", 2.0, 0.5, 8.0),
+        # Dry-cooler fan: VSD cube law on dry-cooler utilisation.
+        InputSpec("fan_rated_frac", "Dry-cooler fan at full duty (of Q_cond)","-", 0.015, 0.0, 0.05),
+        # Container-envelope HVAC + lights.
+        InputSpec("containers_per_MW","40' containers per MW IT",            "-", 3.0, 1.0, 10.0),
+        InputSpec("container_area_m2","Container external area",             "m²", 70.0, 30.0, 150.0),
+        InputSpec("container_U",      "Envelope U-value",            "W/(m²·K)", 0.5, 0.1, 2.0),
+        InputSpec("container_inside_C","Container inside set-point",         "°C", 27.0, 15.0, 35.0),
+        InputSpec("lights_frac",      "Lights (fraction of HVAC)",           "-", 0.25, 0.0, 1.0),
         # Operating + control modes (dimensionless: no unit shown,
         # no Custom… entry — pure two-state selectors).
         InputSpec("operating_mode",   "Operating mode",                "-", 0, 0, 1,

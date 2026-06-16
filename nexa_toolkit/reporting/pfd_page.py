@@ -43,8 +43,10 @@ def _is_gt_system(result) -> bool:
         from nexablock.blocks import GasTurbine, GPUCassette, LiBrChiller
     except Exception:
         return False
-    have = {type(b) for b in solved.blocks}
-    return GasTurbine in have and GPUCassette in have and LiBrChiller in have
+    # isinstance (not exact type) so subclasses like DoubleEffectLiBrChiller count.
+    def _has(cls):
+        return any(isinstance(b, cls) for b in solved.blocks)
+    return _has(GasTurbine) and _has(GPUCassette) and _has(LiBrChiller)
 
 
 def _mode_name(engine, key, val) -> str:
@@ -62,7 +64,8 @@ def _mode_name(engine, key, val) -> str:
 def pfd_context(engine, values, result) -> dict | None:
     if not _is_gt_system(result):
         return None
-    from nexablock.blocks import (GasTurbine, HRSG, LiBrChiller, GPUCassette,
+    from nexablock.blocks import (GasTurbine, HRSG, LiBrChiller,
+                                   DoubleEffectLiBrChiller, GPUCassette,
                                    MED, Radiator)
     solved = result["solved"]
     k = result.get("kpis", {})
@@ -111,6 +114,10 @@ def pfd_context(engine, values, result) -> dict | None:
     export_label = "Grid export" if grid else "External load"
     export_val   = (cs.grid_export_kW if grid else cs.external_load_kW) if cs is not None else 0.0
 
+    # Chiller box label reflects single- vs double-effect (detected from the block).
+    _is_de = any(isinstance(b, DoubleEffectLiBrChiller) for b in solved.blocks)
+    libr_name = "2x LiBr (double-effect)" if _is_de else "LiBr Chiller"
+
     return {
         "title": "Nexa Block v1 — GT system energy balance",
         "design": (f"Design point:  GT {values.get('p_rated_kW',0)/1000:.0f} MW · "
@@ -127,7 +134,7 @@ def pfd_context(engine, values, result) -> dict | None:
                  f"load {load_pct:.1f}%  ·  {gt_actual:,.0f} kWe"],
         "hrsg": ["HRSG", f"{values.get('hrsg_eff_pct',0):.0f}% eff",
                  f"{k.get('Steam generation t/h',0):.2f} t/h"],
-        "libr": ["LiBr Chiller", f"COP {values.get('libr_cop',0):.2f}",
+        "libr": [libr_name, f"COP {values.get('libr_cop',0):.2f}",
                  f"Qcool {qcool:,.0f} kW"],
         "gpu":  ["GPU cassette", f"{it:,.0f} kWe IT  (PUE {values.get('cassette_pue',1.0):.2f})",
                  f"+{cassette:.0f} kW overhead"],

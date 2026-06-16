@@ -113,6 +113,8 @@ class HRSG(Block):
         self._result("Steam enthalpy",     h_steam/1e3,       "kJ/kg","verified",
                      "IAPWS-IF97 via SteamTables2")
         self._result("Steam generation",   mdot_steam*3.6,    "t/h", "verified")
+        self._result("Feedwater flow m3/h", mdot_steam*3.6,   "m³/h","verified",
+                     "feedwater = steam mass (BFP duty)")
         self._result("Feedwater enthalpy", h_fw/1e3,          "kJ/kg","verified")
 
     def references(self):

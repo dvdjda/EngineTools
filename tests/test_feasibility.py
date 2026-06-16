@@ -127,27 +127,33 @@ def test_power_assumption_reflects_operating_mode(engine):
 
 # ── power balance: structure still itemised at screening fidelity ───────────
 
-def test_power_breakdown_uses_actual_supply_and_lists_every_consumer(engine):
-    """The breakdown shows GT actual power as supply, derated capacity as
-    info, every demand component including the cassette overhead split-out
-    from silicon, and an External load line in island mode."""
+def test_power_breakdown_uses_net_supply_and_lists_every_consumer(engine):
+    """The breakdown shows GT *net* power as supply (gross − GT aux derate),
+    gross + derate + derated capacity as info, the demand split into GPU
+    silicon and cassette overhead, every itemised plant-electrical line from
+    plant_loads, and an External load line in island mode."""
     p = engine.solve(_manual_defaults(engine))["feasibility"].by("Power")
     for k in (
-        "GT actual power (supply)",
+        "GT net power (supply)",
+        "GT gross power",
+        "GT auxiliaries (internal derate)",
         "Derated capacity (max available)",
         "GPU silicon (IT power)",
         "Cassette overhead (pumps/ctl)",
-        "MED electrical (pumps)",
-        "LiBr pump electrical",
-        "Radiator fan electrical",
-        "GT auxiliaries",
-        "Plant BoP (lights/HVAC)",
+        "Dielectric coolant pump",        # itemised plant aux (plant_loads)
+        "Cooling-loop pump",
+        "HRSG feed-water pump",
+        "Seawater intake pump",
+        "Dry-cooler fan (VSD)",
+        "HVAC (containers)",
+        "Lights",
         "External load (island, manual)",
     ):
         assert k in p.breakdown, f"missing {k!r}"
         assert p.breakdown[k] is not None, f"{k} must be modelled"
-    # Supply is actual, not derated.
-    assert p.supply == p.breakdown["GT actual power (supply)"]
+    # Supply is GT net (gross − aux), strictly below gross and derated capacity.
+    assert p.supply == p.breakdown["GT net power (supply)"]
+    assert p.breakdown["GT gross power"] >= p.supply
     assert p.breakdown["Derated capacity (max available)"] >= p.supply
 
 
@@ -177,10 +183,14 @@ def test_each_block_emits_its_own_aux_row(engine):
         assert b.results[label].value > 0
 
 
-def test_bop_frac_zeroes_facility_load(engine):
-    v = engine.defaults(); v["bop_frac"] = 0.0
-    f = engine.solve(v)["feasibility"]
-    assert f.by("Power").breakdown["Plant BoP (lights/HVAC)"] == 0.0
+def test_legacy_bop_line_no_longer_on_the_bus(engine):
+    """The lumped 'Plant BoP (lights/HVAC)' fraction is retired — facility
+    load is now the itemised plant_loads model (pumps/fan/HVAC/lights), so
+    the legacy BoP line must not appear on the power bus any more."""
+    p = engine.solve(engine.defaults())["feasibility"].by("Power")
+    assert "Plant BoP (lights/HVAC)" not in p.breakdown
+    assert "HVAC (containers)" in p.breakdown          # itemised replacement
+    assert "Lights" in p.breakdown
 
 
 # ── high-GPU case fails BOTH balances ───────────────────────────────────────
@@ -207,16 +217,22 @@ def test_high_gpu_load_fails_both_power_and_cooling(engine):
 def test_feasibility_is_independent_of_convergence(engine):
     """Acyclic GT system always converges; feasibility lives separately.
 
-    At island/auto defaults (GPU 5 MW) the 1.9% cooling gap is within
-    screening tolerance (2.5%) — both convergence and feasibility read
-    clean. To exercise the cooling-DEFICIT path use GPU 10 MW.
+    At island/auto defaults (GPU 5 MW) the GT is electrically pinned to ~60%
+    load. With the itemised (lower) plant-aux model the GT runs cooler than
+    under the old lumped aux, so HRSG steam delivers ~3.4% less cooling than
+    the GPU heat — just past the 2.5% screening tolerance, so the cooling
+    balance flags a real (small) deficit even though the solver converges.
+    Grid mode (where the GT ramps for cooling) stays feasible — see
+    test_grid_mode_default_feasible.
     """
     r = engine.solve(engine.defaults())
     assert r["solved"].convergence.converged is True   # solver fine
-    assert r["feasibility"].feasible is True           # within screening tolerance
+    assert r["feasibility"].feasible is False           # ~3.4% cooling deficit
+    assert not r["feasibility"].by("Cooling capacity").feasible
+    assert r["feasibility"].by("Power").feasible        # bus still closes
 
-    # Demonstrate the deficit path is still reached at real-shortfall sizes:
+    # Larger real shortfall at GPU 10 MW:
     v = engine.defaults(); v["gpu_it_kW"] = 10000.0
     r2 = engine.solve(v)
     assert r2["solved"].convergence.converged is True
-    assert r2["feasibility"].feasible is False         # real 20% cooling deficit
+    assert r2["feasibility"].feasible is False         # real ~20% cooling deficit

@@ -19,7 +19,8 @@ if _ROOT not in sys.path:
 
 from nexablock.core.stream  import Stream, StreamKind
 from nexablock.core.system  import System, SolvedSystem
-from nexablock.blocks       import (GasTurbine, HRSG, LiBrChiller, MED,
+from nexablock.blocks       import (GasTurbine, HRSG, LiBrChiller,
+                                     DoubleEffectLiBrChiller, MED,
                                      GPUCassette, Radiator)
 
 
@@ -37,9 +38,13 @@ class GTSystemParams:
     steam_p_bar:  float = 10.0
     fw_t_C:       float = 80.0       # HRSG feedwater return set-point
     # LiBr chiller + GPU dielectric-coolant loop.  All HRSG steam → LiBr (no splitter).
+    # chiller_effect selects the absorption-chiller type:
+    #   "single" — single-effect (COP ~0.7, low-grade heat) — the default
+    #   "double" — double-effect (COP ~1.2, needs ~8-10 bar / ~170°C+ steam)
+    chiller_effect: str = "single"
     libr_cop:     float = 0.70
-    gpu_t_in_C:   float = 7.0      # dielectric coolant supply to the GPU
-    gpu_t_out_C:  float = 13.0     # dielectric coolant return from the GPU
+    gpu_t_in_C:   float = 30.0     # dielectric coolant supply to the cassette tank
+    gpu_t_out_C:  float = 42.0     # dielectric coolant return (ΔT 12 K)
     coolant_cp:   float = 2100.0   # dielectric fluid specific heat  (J/kg·K) — NOT water
     coolant_rho:  float = 780.0    # dielectric fluid density (kg/m³) — single-phase immersion
     libr_reject_t_C:  float = 95.0   # LiBr heat-rejection (hot cooling-loop) temperature
@@ -49,13 +54,38 @@ class GTSystemParams:
     # MED (rejection-driven) + radiator
     med_effects:  int   = 8
     sw_t_C:       float = 28.0
+    # MED 3-way bypass.  mode "manual" uses med_bypass_frac directly. mode "auto"
+    # cascades with the radiator: MED captures heat toward its real cold-end
+    # (seawater + med_cold_pinch_K, below the HRSG set-point); the bypass auto-
+    # opens just enough to keep the loop return at the HRSG feedwater set-point
+    # (fw_t_C) instead of over-cooling it.
+    med_bypass_mode:   str   = "manual"
     med_bypass_frac:   float = 0.0   # manual 3-way: fraction of rejection routed around MED
+    med_cold_pinch_K:  float = 15.0  # MED cold-end approach above seawater (auto mode)
     radiator_approach_K: float = 15.0  # radiator cold-branch approach to ambient
     # Plant aux loads (electrical, kW = fraction × base)
-    gt_aux_frac:    float = 0.010    # GT aux as fraction of derated GT capacity
-    libr_pump_frac: float = 0.015    # LiBr solution+refrigerant pumps as fraction of cooling
-    ct_fan_frac:    float = 0.015    # Radiator fans as fraction of rejected heat
-    bop_frac:       float = 0.010    # Plant balance-of-plant (lights/HVAC/etc) as fraction of GT power
+    gt_aux_frac:    float = 0.010    # GT aux as fraction of derated GT capacity (internal derate → GT net)
+    libr_pump_frac: float = 0.015    # (legacy) LiBr pump as fraction of cooling
+    ct_fan_frac:    float = 0.015    # (legacy) radiator fan as fraction of rejected heat
+    bop_frac:       float = 0.010    # (legacy) plant BoP as fraction of GT power
+    # ── Plant-electrical model (IT/flow-driven) ───────────────────────────────
+    pump_eta:        float = 0.70    # pump efficiency (fraction), all pumps
+    dp_diel_bar:     float = 1.5     # dielectric-coolant loop head
+    dp_libr_bar:     float = 2.0     # LiBr internal solution/refrigerant head
+    dp_loop_bar:     float = 3.0     # cooling-water loop circulation head
+    dp_bfp_bar:      float = 9.0     # HRSG boiler feed-water pump head (to steam pressure)
+    dp_sw_bar:       float = 2.0     # seawater intake head
+    dp_med_feed_bar: float = 2.0     # MED feed head
+    dp_brine_bar:    float = 2.0     # brine reject head
+    dp_dist_bar:     float = 2.0     # distillate head
+    dp_cond_bar:     float = 2.0     # condensate return head
+    libr_circ_ratio: float = 12.0    # LiBr solution circulation ratio (× refrigerant flow)
+    fan_rated_frac:  float = 0.015   # dry-cooler fan power at full duty (fraction of Q_cond)
+    containers_per_MW: float = 3.0   # 40' containers per MW IT (1 GPU + 2 aux/other)
+    container_area_m2: float = 70.0  # 40' container external surface
+    container_U:       float = 0.5   # envelope U-value (W/m²·K, standard insulation)
+    container_inside_C:float = 27.0  # container inside set-point
+    lights_frac:       float = 0.25  # lights as fraction of HVAC
     # ── Operating + control modes ────────────────────────────────────────────
     operating_mode:    str   = "island"     # "island" | "grid_tied"
     gt_power_mode:     str   = "auto"       # "auto" | "manual"  — auto: follow electrical demand
@@ -70,7 +100,7 @@ def build_gt_system(p: GTSystemParams) -> SolvedSystem:
     Stashes resolved control state on the SolvedSystem as `.control` for
     downstream renderers (feasibility, audit, reports).
     """
-    from .control import control_setpoints
+    from .control import control_setpoints, med_bypass_fraction, med_loop_cold_C
     cs = control_setpoints(p)
 
     sys = System("GT System — GT + HRSG + LiBr + GPU + MED")
@@ -87,7 +117,9 @@ def build_gt_system(p: GTSystemParams) -> SolvedSystem:
                 fw_t_C=p.fw_t_C))
 
     _coolant_dt = max(0.1, p.gpu_t_out_C - p.gpu_t_in_C)   # K, dielectric loop ΔT
-    chiller = sys.add(LiBrChiller(
+    _ChillerCls = (DoubleEffectLiBrChiller if p.chiller_effect == "double"
+                   else LiBrChiller)
+    chiller = sys.add(_ChillerCls(
                 cop=p.libr_cop, chw_sup_C=p.gpu_t_in_C, chw_dt_K=_coolant_dt,
                 chw_cp=p.coolant_cp, pump_frac=p.libr_pump_frac,
                 reject_t_C=p.libr_reject_t_C, reject_return_C=p.fw_t_C))
@@ -100,7 +132,8 @@ def build_gt_system(p: GTSystemParams) -> SolvedSystem:
 
     med     = sys.add(MED(
                 n_effects=p.med_effects, sw_t_C=p.sw_t_C,
-                bypass_frac=p.med_bypass_frac, loop_cold_C=p.fw_t_C))
+                bypass_frac=med_bypass_fraction(p),
+                loop_cold_C=med_loop_cold_C(p)))
 
     rad     = sys.add(Radiator(
                 t_ambient_C=p.t_ambient_C, approach_K=p.radiator_approach_K,
@@ -138,7 +171,8 @@ def build_gt_system(p: GTSystemParams) -> SolvedSystem:
     # Attach resolved control state for downstream consumers.
     solved.control = cs            # type: ignore[attr-defined]
     solved.operating_mode = p.operating_mode  # type: ignore[attr-defined]
-    solved.bop_frac = p.bop_frac   # type: ignore[attr-defined]  # for Plant PUE in summary()
+    solved.bop_frac = p.bop_frac   # type: ignore[attr-defined]  # legacy
+    solved.params = p              # type: ignore[attr-defined]  # for plant_loads in summary()/feasibility
     return solved
 
 
@@ -168,16 +202,17 @@ def summary(solved: SolvedSystem) -> dict[str, float]:
         kpis["Grid export kW"]       = cs.grid_export_kW
 
     # Plant PUE (electrical, export excluded) — single screening KPI.
-    # Numerator: IT + cassette overhead + LiBr pump + CT fan + GT aux + plant BoP.
-    # Excludes MED electrical, external load, and grid export. Electrical only —
-    # no fuel/thermal. Guard IT > 0. No physics touched; pure post-hoc ratio.
-    it_kW        = kpis["GPU IT load kW"]
-    overhead_kW  = _get(GPUCassette, "Cassette overhead electrical") or 0.0
-    libr_pump_kW = _get(LiBrChiller, "LiBr pump electrical")         or 0.0
-    ct_fan_kW    = _get(Radiator,    "Radiator fan electrical")      or 0.0
-    gt_aux_kW    = _get(GasTurbine,  "GT aux electrical")            or 0.0
-    bop_kW       = max(0.0, getattr(solved, "bop_frac", 0.010)) * kpis["GT actual power kW"]
+    # Numerator: IT + cassette overhead + itemised plant aux (pumps + dry-cooler
+    # fan + HVAC + lights, from plant_loads) + GT aux derate. Excludes external
+    # load and grid export. Electrical only — no fuel/thermal. Guard IT > 0.
+    from .plant_loads import plant_loads
+    it_kW       = kpis["GPU IT load kW"]
+    overhead_kW = _get(GPUCassette, "Cassette overhead electrical") or 0.0
+    gt_aux_kW   = _get(GasTurbine,  "GT aux electrical")            or 0.0
+    p = getattr(solved, "params", None)
+    plant_kW = plant_loads(solved, p)["total"] if p is not None else 0.0
+    kpis["Plant aux electrical kW"] = plant_kW
     kpis["Plant PUE (electrical, export excluded)"] = (
-        (it_kW + overhead_kW + libr_pump_kW + ct_fan_kW + gt_aux_kW + bop_kW) / it_kW
+        (it_kW + overhead_kW + plant_kW + gt_aux_kW) / it_kW
         if it_kW > 0 else 0.0)
     return kpis

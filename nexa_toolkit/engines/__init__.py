@@ -2,6 +2,7 @@
 from . import libr_chiller_engine
 from . import gpu_cassette
 from . import gt_system_v2
+from . import gt_system_v2_de
 from . import gt_system_v2_loadsweep
 
 # auto-load every module in engines/drafts/ so drafts survive app restarts

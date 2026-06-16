@@ -129,6 +129,8 @@ class LiBrChiller(Block):
                      "pump_frac × Q_cool (screening)")
         self._result("Rejection loop flow", mdot_cw*3.6,    "m³/h","verified")
         self._result("Rejection loop temp", reject_t-273.15,"°C",  "input")
+        self._result("Condensate flow m3/h", s.mdot*3.6,    "m³/h","verified",
+                     "steam condensate return")
 
     def references(self):
         return [Reference(

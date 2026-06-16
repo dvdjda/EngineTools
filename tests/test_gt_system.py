@@ -28,8 +28,8 @@ _P = GTSystemParams(
     steam_p_bar  = 10.0,
     fw_t_C       = 80.0,
     libr_cop     = 0.70,
-    gpu_t_in_C   = 7.0,
-    gpu_t_out_C  = 13.0,
+    gpu_t_in_C   = 30.0,
+    gpu_t_out_C  = 42.0,
     gpu_it_kW    = 5_000.0,
     cassette_pue = 1.05,
     med_effects  = 8,
@@ -222,16 +222,17 @@ def test_no_gpu_pue_in_outputs():
 
 def test_plant_pue_design_point():
     """v2 design point (defaults = island/auto, IT 5,000 kW, cassette PUE 1.05):
-    plant_pue = (IT + cassette overhead + LiBr pump + CT fan + GT aux + plant
-    BoP) / IT ≈ 1.134 (electrical only; MED elec, external load and grid export
-    excluded)."""
+    plant_pue = (IT + cassette overhead + itemised plant aux + GT aux) / IT.
+    Plant aux is now the IT/flow-driven model (plant_loads): pumps P=Q·ΔP/η,
+    VSD dry-cooler fan, container HVAC, lights. Electrical only; external load
+    and grid export excluded. At the default the radiator fan and HVAC are
+    idle (no MED bypass, ambient < container set-point) → ≈ 1.116."""
     eng = _v2_engine()
     r = eng.solve(eng.defaults())
     labels = [o.label for o in eng.outputs(r)]
     assert "Plant PUE (electrical, export excluded)" in labels, labels
     pue = r["kpis"]["Plant PUE (electrical, export excluded)"]
-    # New topology (radiator idle at default, no cooling-tower fan): ≈ 1.095.
-    assert abs(pue - 1.095) < 0.01, f"plant_pue={pue:.4f}"
+    assert abs(pue - 1.116) < 0.01, f"plant_pue={pue:.4f}"
 
 
 def test_plant_pue_guards_zero_it():
