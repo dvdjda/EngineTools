@@ -66,7 +66,7 @@ def pfd_context(engine, values, result) -> dict | None:
         return None
     from nexablock.blocks import (GasTurbine, HRSG, LiBrChiller,
                                    DoubleEffectLiBrChiller, GPUCassette,
-                                   MED, Radiator)
+                                   MED, Radiator, Calorifier)
     solved = result["solved"]
     k = result.get("kpis", {})
 
@@ -161,6 +161,8 @@ def pfd_context(engine, values, result) -> dict | None:
                       f"{(1-(cs.libr_frac if cs else 1.0))*100:.0f}% → calorifier"
                       if getattr(getattr(solved, "params", None), "steam_split_mode", "off") == "auto"
                       else None),
+        "cal":       ["Calorifier", "surplus steam",
+                      f"{R(Calorifier, 'Calorifier duty'):,.0f} kW → MED"],
         "streams":   collect_streams(solved),
         # key results
         "results": [
@@ -205,9 +207,11 @@ _B = {
     "gt":   (12,  72, 100, 48), "hrsg": (152, 72, 100, 48),
     "libr": (322, 72, 100, 48), "gpu":  (558, 72, 100, 48),
     "med":  (250, 252, 100, 48), "rad": (452, 252, 112, 48),
+    "cal":  (237, 166, 100, 42),    # calorifier — only drawn when steam split is on
 }
 _BFILL = {"gt": "#F2C14E", "hrsg": "#E8956B", "libr": "#6FA8DC",
-          "gpu": "#B49AD4", "med": "#93D7A8", "rad": "#6FA8DC"}
+          "gpu": "#B49AD4", "med": "#93D7A8", "rad": "#6FA8DC",
+          "cal": "#F0C98A"}
 
 
 def _esc(s): return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
@@ -350,10 +354,10 @@ def pfd_svg(ctx: dict, with_panels: bool = True) -> str:
                  f'<path d="M2 1L8 5L2 9" fill="none" stroke="{col}" stroke-width="1.6"/></marker>')
     f.append('</defs>')
     FL = 'fill="none" stroke-width="2.3"'
+    split = bool(ctx.get("s_split"))
     # flows
     f += [
         f'<path d="M112 96 H152" {FL} stroke="{_SC["steam"]}" marker-end="url(#aS)"/>',
-        f'<path d="M252 96 H322" {FL} stroke="{_SC["steam"]}" marker-end="url(#aS)"/>',
         f'<path d="M422 88 H558" {FL} stroke="{_SC["cool"]}" marker-end="url(#aC)"/>',
         f'<path d="M558 104 H424" {FL} stroke="{_SC["cool"]}" marker-end="url(#aC)"/>',
         f'<path d="M372 120 V179" {FL} stroke="{_SC["rej"]}" marker-end="url(#aR)"/>',
@@ -365,13 +369,29 @@ def pfd_svg(ctx: dict, with_panels: bool = True) -> str:
         f'<path d="M508 300 V322" {FL} stroke="{_SC["loop"]}"/>',
         f'<path d="M508 322 H192 V120" {FL} stroke="{_SC["loop"]}" marker-end="url(#aL)"/>',
     ]
+    if split:
+        # HRSG steam → 3-way splitter → LiBr, with the surplus branch down to the
+        # calorifier, whose hot water joins the rejection at a mixer dot → MED.
+        f += [
+            f'<path d="M252 96 H281" {FL} stroke="{_SC["steam"]}"/>',
+            f'<path d="M293 96 H322" {FL} stroke="{_SC["steam"]}" marker-end="url(#aS)"/>',
+            f'<path d="M287 102 V166" {FL} stroke="{_SC["steam"]}" marker-end="url(#aS)"/>',
+            f'<path d="M287 208 V240 H340" {FL} stroke="{_SC["rej"]}" marker-end="url(#aR)"/>',
+        ]
+        f.append(f'<path d="M287 89 L295 96 L287 103 L279 96 Z" fill="#22303F"/>')  # 3-way valve
+        f.append(f'<circle cx="342" cy="240" r="2.6" fill="{_SC["rej"]}"/>')        # mixer junction
+    else:
+        f.append(f'<path d="M252 96 H322" {FL} stroke="{_SC["steam"]}" marker-end="url(#aS)"/>')
     # valves + junction
     for vx, vy in ((372, 186), (438, 276)):
         f.append(f'<path d="M{vx} {vy-7} L{vx+8} {vy} L{vx} {vy+7} L{vx-8} {vy} Z" fill="#22303F"/>')
     f.append(f'<circle cx="414" cy="276" r="2.6" fill="{_SC["rej"]}"/>')
     # boxes
-    for kk in ("gt", "hrsg", "libr", "gpu", "med", "rad"):
+    boxes = ("gt", "hrsg", "libr", "gpu", "med", "rad") + (("cal",) if split else ())
+    for kk in boxes:
         f.append(_svg_box(kk, ctx[kk]))
+    if split:
+        f.append(_svg_text(287, 86, "3-way", 6, _SC["steam"], anchor="middle"))
     # header
     f.append(_svg_text(12, 22, ctx["title"], 15, "#2E4E7E", bold=True))
     f.append(_svg_text(12, 40, ctx["design"], 8, "#5b6675"))
