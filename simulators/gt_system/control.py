@@ -238,6 +238,14 @@ def control_setpoints(p, max_iter: int = 8,
     # Grid export = supply − all NEXA demand (positive only).
     final_total_steam = _hrsg_steam_kgps(p, load_pct, t_amb_K)
     final_aux = _aux_loads_kW(p, load_pct, final_total_steam, gpu_heat_kW)
+
+    # LiBr-priority steam split: when enabled, feed the chiller only the steam it
+    # needs to cool the GPU; the surplus goes to the calorifier → MED. When the
+    # chiller is cooling-limited (demand ≥ available) the fraction saturates at 1
+    # and the calorifier idles. Off (default): all steam → LiBr (frac = 1).
+    derived_libr = p.steam_split_mode == "auto"
+    if derived_libr:
+        libr_frac = min(1.0, libr_steam_kgps / max(final_total_steam, 1e-9))
     p_gt_kW = p_derate * load_pct / 100.0
     nexa_demand = final_aux["gpu_kW"] + final_aux["plant"] + final_aux["gt_aux"]
     if p.operating_mode == "grid_tied":
@@ -253,7 +261,7 @@ def control_setpoints(p, max_iter: int = 8,
         external_load_kW=external_load,
         grid_export_kW=grid_export,
         derived_load_pct=(p.gt_power_mode == "auto"),
-        derived_libr_frac=False,        # no splitter — all steam → LiBr
+        derived_libr_frac=derived_libr,
         required_load_for_elec_pct=required_load_for_elec_pct,
         required_load_for_steam_pct=required_load_for_steam_pct,
         iterations=iters,

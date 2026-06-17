@@ -157,6 +157,10 @@ def pfd_context(engine, values, result) -> dict | None:
         "s_sw":      f"seawater {sw_t:.0f}°C · {sw_m3h:,.0f} m³/h",
         "s_fresh":   f"fresh {med_water:,.0f} m³/d",
         "s_brine":   f"brine {brine_m3h:,.0f} m³/h",
+        "s_split":   (f"steam split {(cs.libr_frac if cs else 1.0)*100:.0f}% LiBr / "
+                      f"{(1-(cs.libr_frac if cs else 1.0))*100:.0f}% → calorifier"
+                      if getattr(getattr(solved, "params", None), "steam_split_mode", "off") == "auto"
+                      else None),
         "streams":   collect_streams(solved),
         # key results
         "results": [
@@ -234,7 +238,7 @@ def collect_streams(solved) -> list:
     T in °C, P in bar, flow in kg/s — read from each port's solved Stream, with the
     feedwater and seawater inlets (seeded pools) taken from the computed results."""
     from nexablock.blocks import (GasTurbine, HRSG, LiBrChiller, GPUCassette,
-                                  MED, Radiator)
+                                  MED, Radiator, Calorifier)
     p = getattr(solved, "params", None)
 
     def blk(cls): return next((b for b in solved.blocks if isinstance(b, cls)), None)
@@ -265,7 +269,7 @@ def collect_streams(solved) -> list:
                 f"{M:.1f}" if M is not None else "—")
 
     gt = blk(GasTurbine); h = blk(HRSG); lb = blk(LiBrChiller)
-    gp = blk(GPUCassette); md = blk(MED); rd = blk(Radiator)
+    gp = blk(GPUCassette); md = blk(MED); rd = blk(Radiator); cal = blk(Calorifier)
     fw = getattr(p, "fw_t_C", 80.0); sw = getattr(p, "sw_t_C", 28.0)
     sp = getattr(p, "steam_p_bar", 10.0)
     s_steam = strm(h, "steam")
@@ -273,7 +277,7 @@ def collect_streams(solved) -> list:
     sw_m3h = res(md, "Seawater feed")
     sw_kgs = sw_m3h * 1020.0 / 3600.0 if sw_m3h else None
 
-    return [
+    groups = [
         ("Gas Turbine", [prow("exhaust out", gt, "exhaust")]),
         ("HRSG", [prow("exhaust in", h, "exhaust_in"),
                   crow("feedwater in", fw, sp, steam_mdot),
@@ -294,31 +298,42 @@ def collect_streams(solved) -> list:
         ("Radiator", [prow("loop in", rd, "loop_in"),
                       prow("loop out", rd, "loop_out")]),
     ]
+    if cal is not None:                                  # LiBr-priority steam split active
+        groups.append(("Calorifier (surplus steam)",
+                       [prow("steam in", cal, "steam_in"),
+                        prow("hot water out", cal, "hot_out"),
+                        prow("condensate out", cal, "condensate")]))
+    return groups
 
 
-def _render_stream_table(groups, y0=358) -> list:
-    """Two-column heat-&-material balance table. Left col = first 3 groups,
-    right col = last 3. Returns SVG fragments."""
+def _render_stream_table(groups, y0=356):
+    """Two-column heat-&-material balance table; groups split evenly between the
+    columns (so an extra block like the calorifier still fits). Returns
+    (svg_fragments, bottom_y)."""
     out = [_svg_text(12, y0, "Stream table  —  inlet / outlet  T (°C) · P (bar) · flow (kg/s)",
                      10, "#2E4E7E", bold=True)]
-    cols = [(groups[:3], 12, 196, 236, 300), (groups[3:], 352, 536, 576, 644)]
+    half = (len(groups) + 1) // 2
+    cols = [(groups[:half], 12, 196, 236, 300), (groups[half:], 352, 536, 576, 644)]
+    pitch = 12
+    bottom = y0 + 16
     for grp_list, nx, tx, px, fx in cols:
         yy = y0 + 16
         out += [_svg_text(tx, yy, "T", 7, "#5b6675", anchor="end"),
                 _svg_text(px, yy, "bar", 7, "#5b6675", anchor="end"),
                 _svg_text(fx, yy, "kg/s", 7, "#5b6675", anchor="end")]
-        yy += 13
+        yy += pitch
         for gname, rows in grp_list:
             out.append(_svg_text(nx, yy, gname, 8.5, "#2E4E7E", bold=True))
-            yy += 13
+            yy += pitch
             for (label, T, P, F) in rows:
                 out += [_svg_text(nx + 8, yy, label, 7.6, "#22303F"),
                         _svg_text(tx, yy, T, 7.6, "#22303F", anchor="end"),
                         _svg_text(px, yy, P, 7.6, "#22303F", anchor="end"),
                         _svg_text(fx, yy, F, 7.6, "#22303F", anchor="end")]
-                yy += 13
+                yy += pitch
             yy += 3
-    return out
+        bottom = max(bottom, yy)
+    return out, bottom
 
 
 def pfd_svg(ctx: dict, with_panels: bool = True) -> str:
@@ -381,25 +396,33 @@ def pfd_svg(ctx: dict, with_panels: bool = True) -> str:
     f.append(_svg_text(212, 280, ctx["s_sw"],    6.5, _SC["sea"], anchor="end"))
     f.append(_svg_text(280, 328, ctx["s_fresh"], 6.5, _SC["sea"], anchor="middle"))
     f.append(_svg_text(330, 328, ctx["s_brine"], 6.5, _SC["brine"]))
+    # steam-split annotation (only when the calorifier path is active)
+    if ctx.get("s_split"):
+        f.append(_svg_text(287, 54, ctx["s_split"], 6.5, _SC["steam"], anchor="middle"))
     # stream table (heat & material balance) — always shown, both chart + report
-    f += _render_stream_table(ctx["streams"], y0=358)
+    tbl, tbl_bottom = _render_stream_table(ctx["streams"], y0=356)
+    f += tbl
     # report-only footer: compact energy balance + stream-colour legend
     if with_panels:
+        yb = tbl_bottom + 14
         bx = 12
         for head, txt, ok in ctx["balance"][:3]:        # Electrical · Cooling · Audit
             col = "#22303F" if ok is None else ("#2E7D4E" if ok else "#C0392B")
-            f.append(_svg_text(bx, 582, f"{head}", 7.5, "#2E4E7E", bold=True))
-            f.append(_svg_text(bx, 593, txt, 6.8, col))
+            f.append(_svg_text(bx, yb, f"{head}", 7.5, "#2E4E7E", bold=True))
+            f.append(_svg_text(bx, yb + 11, txt, 6.8, col))
             bx += 178
-        lx = 12
+        lx = 12; ly = yb + 25
         for txt, col in (("steam / heat", _SC["steam"]), ("dielectric coolant", _SC["cool"]),
                          ("LiBr rejection", _SC["rej"]), ("loop return", _SC["loop"]),
                          ("seawater / fresh", _SC["sea"]), ("brine", _SC["brine"])):
-            f.append(f'<line x1="{lx}" y1="605" x2="{lx+14}" y2="605" stroke="{col}" stroke-width="2.4"/>')
-            f.append(_svg_text(lx + 18, 608, txt, 6.5, "#22303F"))
+            f.append(f'<line x1="{lx}" y1="{ly}" x2="{lx+14}" y2="{ly}" stroke="{col}" stroke-width="2.4"/>')
+            f.append(_svg_text(lx + 18, ly + 3, txt, 6.5, "#22303F"))
             lx += 112
+        H = ly + 14
+    else:
+        H = tbl_bottom + 10
     body = "".join(f)
-    return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 {H}" '
+    return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 {int(H)}" '
             f'font-family="Helvetica,Arial,sans-serif">{body}</svg>')
 
 
@@ -432,7 +455,9 @@ def make_pfd_flowable(engine, values, result):
     # small safety margin so the image never overflows the frame.
     fw = LAND[0] - 24 * mm - 14
     fh = LAND[1] - 24 * mm - 14
-    aspect = 680.0 / 615.0
+    import re
+    m = re.search(r'viewBox="0 0 (\d+) (\d+)"', svg)     # match the dynamic height
+    aspect = (int(m.group(1)) / int(m.group(2))) if m else 680.0 / 615.0
     if fw / fh > aspect:                               # height-bound
         h = fh; w = fh * aspect
     else:

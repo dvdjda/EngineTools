@@ -21,7 +21,8 @@ from nexablock.core.stream  import Stream, StreamKind
 from nexablock.core.system  import System, SolvedSystem
 from nexablock.blocks       import (GasTurbine, HRSG, LiBrChiller,
                                      DoubleEffectLiBrChiller, MED,
-                                     GPUCassette, Radiator)
+                                     GPUCassette, Radiator, SteamSplitter,
+                                     Calorifier, Mixer)
 
 
 @dataclass
@@ -42,6 +43,11 @@ class GTSystemParams:
     #   "single" — single-effect (COP ~0.7, low-grade heat) — the default
     #   "double" — double-effect (COP ~1.2, needs ~8-10 bar / ~170°C+ steam)
     chiller_effect: str = "single"
+    # steam_split_mode: "off" (all steam → LiBr) or "auto" (LiBr-priority — feed
+    # the chiller only the steam it needs to cool the GPU, route the surplus
+    # through a calorifier to the MED hot-water loop, so the chiller is never
+    # over-fed when GPU demand drops).
+    steam_split_mode: str = "off"
     libr_cop:     float = 0.70
     gpu_t_in_C:   float = 30.0     # dielectric coolant supply to the cassette tank
     gpu_t_out_C:  float = 42.0     # dielectric coolant return (ΔT 12 K)
@@ -151,9 +157,22 @@ def build_gt_system(p: GTSystemParams) -> SolvedSystem:
         cp=3900.0, rho=1020.0, label="Seawater")
     med.inlets["seawater"].stream = sw_seed
 
+    # ── Steam-split (LiBr-priority) blocks, only when enabled ─────────────────
+    _split = p.steam_split_mode == "auto"
+    if _split:
+        splitter = sys.add(SteamSplitter(libr_frac=cs.libr_frac))
+        calor    = sys.add(Calorifier(hot_t_C=p.libr_reject_t_C, return_t_C=p.fw_t_C))
+        mixer    = sys.add(Mixer())
+
     # ── Wire connections ──────────────────────────────────────────────────────
     sys.connect(gt.outlets["exhaust"],     hrsg.inlets["exhaust_in"])
-    sys.connect(hrsg.outlets["steam"],     chiller.inlets["steam_in"])   # all steam → LiBr
+    if _split:
+        # HRSG steam → 3-way: LiBr gets the steam it needs; surplus → calorifier.
+        sys.connect(hrsg.outlets["steam"],      splitter.inlets["steam_in"])
+        sys.connect(splitter.outlets["to_libr"], chiller.inlets["steam_in"])
+        sys.connect(splitter.outlets["to_med"],  calor.inlets["steam_in"])
+    else:
+        sys.connect(hrsg.outlets["steam"],     chiller.inlets["steam_in"])   # all steam → LiBr
     sys.connect(chiller.outlets["chw_supply"], gpu.inlets["coolant_in"])
     sys.connect(gpu.outlets["coolant_out"], chiller.inlets["chw_return"])  # dielectric loop (recycle)
     # Cooling-water loop: LiBr rejection → MED (rejection-driven) → radiator.
@@ -163,7 +182,13 @@ def build_gt_system(p: GTSystemParams) -> SolvedSystem:
     # graph cycle because the controlled return makes the feedwater temperature
     # fixed — no feedback to iterate. The dielectric chilled loop is the real
     # recycle (GPU heat → LiBr).
-    sys.connect(chiller.outlets["reject_out"], med.inlets["loop_in"])
+    if _split:
+        # LiBr rejection + calorifier hot water → mixer → MED loop feed.
+        sys.connect(chiller.outlets["reject_out"], mixer.inlets["in_a"])
+        sys.connect(calor.outlets["hot_out"],      mixer.inlets["in_b"])
+        sys.connect(mixer.outlets["out"],          med.inlets["loop_in"])
+    else:
+        sys.connect(chiller.outlets["reject_out"], med.inlets["loop_in"])
     sys.connect(med.outlets["loop_out"],       rad.inlets["loop_in"])
 
     # ── Solve ─────────────────────────────────────────────────────────────────

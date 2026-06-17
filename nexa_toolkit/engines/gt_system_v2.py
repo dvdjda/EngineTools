@@ -30,6 +30,7 @@ _MODE_NUM_TO_OP   = {0: "island", 1: "grid_tied"}
 _MODE_NUM_TO_GTP  = {0: "auto", 1: "manual"}
 _MODE_NUM_TO_SPL  = {0: "auto", 1: "manual"}
 _MODE_NUM_TO_MED  = {0: "manual", 1: "auto"}
+_MODE_NUM_TO_SPLIT = {0: "off", 1: "auto"}
 
 
 def _params_from(v: dict) -> GTSystemParams:
@@ -61,6 +62,7 @@ def _params_from(v: dict) -> GTSystemParams:
         med_bypass_frac     = float(v.get("med_bypass_frac",     0.0)),
         med_bypass_mode     = _MODE_NUM_TO_MED.get(int(v.get("med_bypass_mode", 1)), "auto"),
         med_cold_pinch_K    = float(v.get("med_cold_pinch_K",    15.0)),
+        steam_split_mode    = _MODE_NUM_TO_SPLIT.get(int(v.get("steam_split_mode", 0)), "off"),
         radiator_approach_K = float(v.get("radiator_approach_K", 15.0)),
         gt_aux_frac    = float(v.get("gt_aux_frac",    0.010)),
         libr_pump_frac = float(v.get("libr_pump_frac", 0.015)),
@@ -116,6 +118,9 @@ class GTSystemV2(Engine):
         InputSpec("steam_p_bar",  "Steam pressure",         "bar", 10.0,      1,      40),
         InputSpec("fw_t_C",       "HRSG feedwater / loop return set-point", "°C", 80.0, 20, 150),
         InputSpec("libr_cop",     "LiBr COP",               "-",   0.70,      0.5,    0.85),
+        InputSpec("steam_split_mode", "Steam split (surplus → MED via calorifier)", "-", 0, 0, 1,
+                  choices={"Off (all steam → LiBr)": 0,
+                           "Auto (LiBr-priority, surplus → calorifier)": 1}),
         InputSpec("gpu_t_in_C",   "GPU coolant T_in (dielectric)",  "°C", 30.0, 5,  45),
         InputSpec("gpu_t_out_C",  "GPU coolant T_out (dielectric)", "°C", 42.0, 10, 60),
         InputSpec("coolant_cp",   "Dielectric coolant cp",    "J/(kg·K)", 2100.0, 1000, 4500),

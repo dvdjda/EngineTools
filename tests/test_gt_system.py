@@ -265,5 +265,51 @@ def test_single_effect_auto_med_bypass_holds_setpoint():
         assert 0.0 < med.results["MED bypass"].value < 100.0
 
 
+# ── §8.9  LiBr-priority steam split (calorifier) ─────────────────────────────
+# When the chiller would over-perform (GPU demand below what the steam drives),
+# the optional steam split feeds the LiBr only what it needs and routes the
+# surplus steam through a calorifier into the MED hot-water loop. Default Off.
+
+def test_steam_split_is_selectable_input_default_off():
+    keys = {i.key for i in _v2_engine().inputs}
+    assert "steam_split_mode" in keys
+    d = next(i.default for i in _v2_engine().inputs if i.key == "steam_split_mode")
+    assert int(d) == 0                                  # Off by default
+
+
+def test_steam_split_off_has_no_calorifier():
+    from nexablock.blocks import Calorifier
+    from simulators.gt_system.system import GTSystemParams, build_gt_system
+    s = build_gt_system(GTSystemParams())               # default off
+    assert not any(isinstance(b, Calorifier) for b in s.blocks)
+
+
+def test_steam_split_auto_right_sizes_chiller_and_adds_calorifier():
+    """Over-performing case (fixed GT, low GPU): Auto split matches LiBr cooling
+    to the GPU heat (no surplus) and routes the surplus steam to a calorifier."""
+    from nexablock.blocks import Calorifier, LiBrChiller
+    from simulators.gt_system.system import (GTSystemParams, build_gt_system,
+                                             summary)
+    from simulators.gt_system.feasibility import feasibility
+    base = dict(gt_power_mode="manual", load_pct=85.0, operating_mode="grid_tied",
+                gpu_it_kW=2000.0)
+    s_off = build_gt_system(GTSystemParams(steam_split_mode="off", **base))
+    s_on  = build_gt_system(GTSystemParams(steam_split_mode="auto", **base))
+    gpu_heat = 2000.0 * 1.05
+    cool_off = summary(s_off)["LiBr cooling kW"]
+    cool_on  = summary(s_on)["LiBr cooling kW"]
+    assert cool_off > gpu_heat * 1.5                    # off → big over-cooling
+    assert abs(cool_on - gpu_heat) / gpu_heat < 0.05    # auto → matched to GPU heat
+    cal = next((b for b in s_on.blocks if isinstance(b, Calorifier)), None)
+    assert cal is not None and cal.results["Calorifier duty"].value > 0
+    assert s_on.convergence.converged
+    assert s_on.control.libr_frac < 1.0                 # surplus diverted
+
+
+def test_steam_split_auto_available_on_both_engines():
+    for key in ("gt_system_v2", "gt_system_v2_de"):
+        assert "steam_split_mode" in {i.key for i in get(key).inputs}
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

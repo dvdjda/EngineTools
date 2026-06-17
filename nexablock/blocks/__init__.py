@@ -8,8 +8,10 @@ from .libr_chiller_de import DoubleEffectLiBrChiller
 from .med             import MED
 from .cooling_tower   import CoolingTower
 from .radiator        import Radiator
+from .steam_split     import Calorifier, Mixer
 
 __all__ = [
     "GPUCassette", "GasTurbine", "HRSG", "SteamSplitter",
     "LiBrChiller", "DoubleEffectLiBrChiller", "MED", "CoolingTower", "Radiator",
+    "Calorifier", "Mixer",
 ]

@@ -54,7 +54,7 @@ When you load the page, the layout is two columns:
 ## 3. The standard workflow
 
 1. **Pick an engine** in the system dropdown.
-2. **Adjust inputs** in the left column as needed. For the v2 GT system, the modes at the bottom (Operating mode, GT power control) decide how the controller behaves — see [`NEXA_SIMULATOR.md`](NEXA_SIMULATOR.md) §4.
+2. **Adjust inputs** in the left column as needed. For the v2 GT system, the mode switches (Operating mode, GT power control, MED bypass, Steam split) decide how the controller behaves — see [`NEXA_SIMULATOR.md`](NEXA_SIMULATOR.md) §4.
 3. **Click Run**. The right pane populates with status cards, the flowsheet, the highlights, and the full results table.
 4. **Read the three status cards** to know whether the result is trustworthy:
    - Convergence card must be green.

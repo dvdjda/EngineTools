@@ -228,9 +228,11 @@ Note: with the default **Auto** MED bypass (§4.3) the bypass valve already blen
 
 ---
 
-## 4. Control modes — three switches, one external-load knob
+## 4. Control modes — four switches, one external-load knob
 
-The v2 GT engine has three mode switches (`operating_mode`, `gt_power_mode`, `med_bypass_mode`) and the `external_load_kW` scalar. Defaults are island / auto / auto / 0 kW — the "real-plant" semantics. There is no longer a steam-split mode: with no splitter, `libr_frac` is constant 1.0.
+The v2 GT engine has four mode switches (`operating_mode`, `gt_power_mode`, `med_bypass_mode`, `steam_split_mode`) and the `external_load_kW` scalar. Defaults are island / auto / auto / off / 0 kW — the "real-plant" semantics.
+
+**`steam_split_mode` — Off / Auto (LiBr-priority).** Off (default): all HRSG steam → LiBr (`libr_frac` = 1.0). Auto: when GPU cooling demand is below what the steam would drive (the chiller would *over-perform*), a steam 3-way feeds the LiBr only the steam it needs (`libr_frac = libr_steam_demand / total_steam`) and routes the **surplus steam through a Calorifier** (steam→hot-water HX) into the MED rejection loop — so the chiller is matched to the GPU load and the surplus makes fresh water instead of over-cooling. Respects the heat grades (LiBr runs on steam, MED on hot water). Adds the SteamSplitter + Calorifier + Mixer blocks (and the T12 / M9 audit checks) only when on. See **Steam split / Calorifier** in [`DICTIONARY.md`](DICTIONARY.md).
 
 ### 4.1 Operating mode — Island / Grid-tied
 
@@ -477,7 +479,7 @@ At the defaults the user sees (verified by live solve): GT net power supply ≈ 
 
 ## 11. Where to go from here
 
-- **Adjust the mode switches** (Operating mode, GT power, MED bypass) to explore the design space.
+- **Adjust the mode switches** (Operating mode, GT power, MED bypass, Steam split) to explore the design space.
 - **Run Sensitivity** with multi-select inputs/KPIs to see what matters.
 - **Run a 2D sweep** of, say, `gpu_it_kW × t_ambient_C` with `Grid export` as the contoured KPI to learn the export envelope.
 - **Tick "Include latest study"** before downloading PDF/Excel to embed the chart in the report.
