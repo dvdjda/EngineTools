@@ -649,9 +649,23 @@ def build_pdf(engine, values, result, path, chart_png, ai_text=None, study=None)
         ("LEFTPADDING", (0, 0), (0, -1), 6)]))
     story.append(rt)
 
-    story.append(Paragraph("Chart", sec))
-    story.append(Image(chart_png, width=W, height=W * 3.5 / 9.2))
-    story.append(Spacer(1, 6))
+    # Build the landscape PFD page up front. When it exists (GT systems), the
+    # in-body flowsheet chart is the same diagram at lower resolution, so we drop
+    # it and keep only the high-quality PFD page at the end.
+    pfd_flowable = None
+    try:
+        from nexa_toolkit.reporting.pfd_page import make_pfd_flowable
+        pfd_flowable = make_pfd_flowable(engine, values, result)
+    except Exception as _e:
+        story.append(Paragraph(f"<i>PFD page omitted: {_e}</i>", body))
+
+    # Keep the in-body chart for non-GT engines, and for the load-sweep variant
+    # (whose chart is the sweep, not the PFD). Drop it only when it would be a
+    # lower-res duplicate of the landscape PFD page (plain GT systems).
+    if pfd_flowable is None or "sweep" in result:
+        story.append(Paragraph("Chart", sec))
+        story.append(Image(chart_png, width=W, height=W * 3.5 / 9.2))
+        story.append(Spacer(1, 6))
 
     # Optional study chart appended after the flowsheet chart.
     if study is not None:
@@ -682,13 +696,8 @@ def build_pdf(engine, values, result, path, chart_png, ai_text=None, study=None)
                 story.append(Spacer(1, 5))
 
     # ── PFD flowsheet — final landscape page (live values; GT system only) ──
-    try:
-        from nexa_toolkit.reporting.pfd_page import make_pfd_flowable
-        pfd = make_pfd_flowable(engine, values, result)
-        if pfd is not None:
-            story += [NextPageTemplate("pfd"), PageBreak(), pfd]
-    except Exception as _e:
-        story.append(Paragraph(f"<i>PFD page omitted: {_e}</i>", body))
+    if pfd_flowable is not None:
+        story += [NextPageTemplate("pfd"), PageBreak(), pfd_flowable]
 
     doc.build(story)
     return path

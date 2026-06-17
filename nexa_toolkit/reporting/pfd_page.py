@@ -121,7 +121,7 @@ def pfd_context(engine, values, result) -> dict | None:
 
     # Chiller box label reflects single- vs double-effect (detected from the block).
     _is_de = any(isinstance(b, DoubleEffectLiBrChiller) for b in solved.blocks)
-    libr_name = "2x LiBr (double-effect)" if _is_de else "LiBr Chiller"
+    libr_name = "2x LiBr (DE)" if _is_de else "LiBr Chiller"
 
     return {
         "title": "Nexa Block v1 — GT system energy balance",
