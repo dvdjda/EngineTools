@@ -37,6 +37,25 @@ def hooks(engine):
     return engine.study_hooks()
 
 
+def test_pfd_stream_table_covers_every_block_port(engine, vals):
+    """The PFD stream table lists T/P/flow for each block's inlets & outlets,
+    including the MED seawater feed, fresh-water and brine streams."""
+    from nexa_toolkit.reporting.pfd_page import collect_streams
+    r = engine.solve(vals)
+    groups = dict(collect_streams(r["solved"]))
+    assert set(groups) == {"Gas Turbine", "HRSG", "LiBr chiller", "GPU cassette",
+                           "MED desalination", "Radiator"}
+    med_ports = [row[0] for row in groups["MED desalination"]]
+    for p in ("seawater in", "fresh water out", "brine out", "loop in", "loop out"):
+        assert p in med_ports, p
+    # every port row carries three columns, and the headline streams are numeric
+    for grp in groups.values():
+        for label, T, P, F in grp:
+            assert isinstance(T, str) and isinstance(P, str) and isinstance(F, str)
+    gt_exh = groups["Gas Turbine"][0]
+    assert gt_exh[1] != "—" and gt_exh[3] != "—"      # GT exhaust has T and flow
+
+
 @pytest.fixture(scope="module")
 def vals(engine):
     return engine.defaults()

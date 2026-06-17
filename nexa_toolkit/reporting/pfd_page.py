@@ -101,6 +101,9 @@ def pfd_context(engine, values, result) -> dict | None:
     _byp_tag  = "auto" if _med_mode == "auto" else "manual"
     rad_duty  = R(Radiator, "Radiator duty")
     rad_split = R(Radiator, "Through-radiator split")
+    sw_m3h    = R(MED, "Seawater feed")
+    brine_m3h = R(MED, "Brine reject")
+    sw_t      = values.get("sw_t_C", 28.0)
 
     feas = result.get("feasibility")
     pbal = cbal = None
@@ -151,6 +154,10 @@ def pfd_context(engine, values, result) -> dict | None:
         "s_rej":     f"rejection {reject_t:.0f}°C · {qcond:,.0f} kW",
         "s_byp":     f"MED bypass {med_byp:.0f}% ({_byp_tag})",
         "s_return":  f"return {values.get('fw_t_C',0):.0f}°C -> HRSG feedwater (closed loop)",
+        "s_sw":      f"seawater {sw_t:.0f}°C · {sw_m3h:,.0f} m³/h",
+        "s_fresh":   f"fresh {med_water:,.0f} m³/d",
+        "s_brine":   f"brine {brine_m3h:,.0f} m³/h",
+        "streams":   collect_streams(solved),
         # key results
         "results": [
             ("GT actual power",  f"{gt_actual:,.0f} kW", "verified"),
@@ -187,7 +194,8 @@ def _balance_lines(pbal, cbal, n_ok, n_tot, fuel, qcond):
 
 # ── single SVG layout — used for BOTH the on-screen chart and (rasterised) the
 #    report page, so they are guaranteed identical. ───────────────────────────
-_SC = {"steam": "#E0902F", "cool": "#2BB6A3", "rej": "#C0392B", "loop": "#2E6FB0"}
+_SC = {"steam": "#E0902F", "cool": "#2BB6A3", "rej": "#C0392B", "loop": "#2E6FB0",
+       "sea": "#1F8A70", "brine": "#8A6D3B"}
 # block boxes (x, y, w, h) on the 680-wide SVG canvas
 _B = {
     "gt":   (12,  72, 100, 48), "hrsg": (152, 72, 100, 48),
@@ -221,14 +229,107 @@ def _svg_text(x, y, s, size, color, anchor="start", bold=False):
             f'{w} fill="{color}">{_esc(s)}</text>')
 
 
+def collect_streams(solved) -> list:
+    """Heat-&-material balance rows for every block port: (group, [(port, T, P, flow)]).
+    T in °C, P in bar, flow in kg/s — read from each port's solved Stream, with the
+    feedwater and seawater inlets (seeded pools) taken from the computed results."""
+    from nexablock.blocks import (GasTurbine, HRSG, LiBrChiller, GPUCassette,
+                                  MED, Radiator)
+    p = getattr(solved, "params", None)
+
+    def blk(cls): return next((b for b in solved.blocks if isinstance(b, cls)), None)
+
+    def strm(b, name):
+        if b is None:
+            return None
+        port = getattr(b, "inlets", {}).get(name) or getattr(b, "outlets", {}).get(name)
+        return port.stream if port is not None else None
+
+    def res(b, label, d=None):
+        if b is None:
+            return d
+        r = b.results.get(label)
+        return r.value if r is not None else d
+
+    def prow(label, b, name):
+        s = strm(b, name)
+        T = f"{s.T - 273.15:.0f}" if (s is not None and s.T) else "—"
+        P = f"{s.P / 1e5:.1f}"    if (s is not None and s.P) else "—"
+        M = f"{s.mdot:.1f}"       if (s is not None and s.mdot) else "—"
+        return (label, T, P, M)
+
+    def crow(label, T, P, M):
+        return (label,
+                f"{T:.0f}" if T is not None else "—",
+                f"{P:.1f}" if P is not None else "—",
+                f"{M:.1f}" if M is not None else "—")
+
+    gt = blk(GasTurbine); h = blk(HRSG); lb = blk(LiBrChiller)
+    gp = blk(GPUCassette); md = blk(MED); rd = blk(Radiator)
+    fw = getattr(p, "fw_t_C", 80.0); sw = getattr(p, "sw_t_C", 28.0)
+    sp = getattr(p, "steam_p_bar", 10.0)
+    s_steam = strm(h, "steam")
+    steam_mdot = s_steam.mdot if (s_steam is not None and s_steam.mdot) else None
+    sw_m3h = res(md, "Seawater feed")
+    sw_kgs = sw_m3h * 1020.0 / 3600.0 if sw_m3h else None
+
+    return [
+        ("Gas Turbine", [prow("exhaust out", gt, "exhaust")]),
+        ("HRSG", [prow("exhaust in", h, "exhaust_in"),
+                  crow("feedwater in", fw, sp, steam_mdot),
+                  prow("steam out", h, "steam"),
+                  prow("stack gas out", h, "stack")]),
+        ("LiBr chiller", [prow("steam in", lb, "steam_in"),
+                          prow("coolant return in", lb, "chw_return"),
+                          prow("coolant supply out", lb, "chw_supply"),
+                          prow("condensate out", lb, "condensate"),
+                          prow("rejection out", lb, "reject_out")]),
+        ("GPU cassette", [prow("coolant in", gp, "coolant_in"),
+                          prow("coolant out", gp, "coolant_out")]),
+        ("MED desalination", [prow("loop in", md, "loop_in"),
+                              crow("seawater in", sw, 1.5, sw_kgs),
+                              prow("loop out", md, "loop_out"),
+                              prow("fresh water out", md, "fresh"),
+                              prow("brine out", md, "brine")]),
+        ("Radiator", [prow("loop in", rd, "loop_in"),
+                      prow("loop out", rd, "loop_out")]),
+    ]
+
+
+def _render_stream_table(groups, y0=358) -> list:
+    """Two-column heat-&-material balance table. Left col = first 3 groups,
+    right col = last 3. Returns SVG fragments."""
+    out = [_svg_text(12, y0, "Stream table  —  inlet / outlet  T (°C) · P (bar) · flow (kg/s)",
+                     10, "#2E4E7E", bold=True)]
+    cols = [(groups[:3], 12, 196, 236, 300), (groups[3:], 352, 536, 576, 644)]
+    for grp_list, nx, tx, px, fx in cols:
+        yy = y0 + 16
+        out += [_svg_text(tx, yy, "T", 7, "#5b6675", anchor="end"),
+                _svg_text(px, yy, "bar", 7, "#5b6675", anchor="end"),
+                _svg_text(fx, yy, "kg/s", 7, "#5b6675", anchor="end")]
+        yy += 13
+        for gname, rows in grp_list:
+            out.append(_svg_text(nx, yy, gname, 8.5, "#2E4E7E", bold=True))
+            yy += 13
+            for (label, T, P, F) in rows:
+                out += [_svg_text(nx + 8, yy, label, 7.6, "#22303F"),
+                        _svg_text(tx, yy, T, 7.6, "#22303F", anchor="end"),
+                        _svg_text(px, yy, P, 7.6, "#22303F", anchor="end"),
+                        _svg_text(fx, yy, F, 7.6, "#22303F", anchor="end")]
+                yy += 13
+            yy += 3
+    return out
+
+
 def pfd_svg(ctx: dict, with_panels: bool = True) -> str:
     """The GT-system PFD as an SVG string. with_panels adds the Key-results /
     energy-balance / legend panels (report page); without -> flow diagram only
     (on-screen chart). Same layout either way, so the two always match."""
-    H = 600 if with_panels else 360
+    H = 615 if with_panels else 575
     f = ['<defs>']
     for nm, col in (("aS", _SC["steam"]), ("aC", _SC["cool"]),
-                    ("aR", _SC["rej"]), ("aL", _SC["loop"])):
+                    ("aR", _SC["rej"]), ("aL", _SC["loop"]),
+                    ("aSea", _SC["sea"]), ("aBr", _SC["brine"])):
         f.append(f'<marker id="{nm}" viewBox="0 0 10 10" refX="8" refY="5" '
                  f'markerWidth="6" markerHeight="6" orient="auto">'
                  f'<path d="M2 1L8 5L2 9" fill="none" stroke="{col}" stroke-width="1.6"/></marker>')
@@ -270,39 +371,33 @@ def pfd_svg(ctx: dict, with_panels: bool = True) -> str:
     f.append(_svg_text(490, 62, ctx["s_diel"],    7, _SC["cool"],  anchor="middle"))
     f.append(_svg_text(382, 150, ctx["s_rej"],    7, _SC["rej"]))
     f.append(_svg_text(420, 232, ctx["s_byp"],    7, _SC["rej"]))
-    f.append(_svg_text(196, 318, ctx["s_return"], 7.5, _SC["loop"]))
-    # panels
+    f.append(_svg_text(120, 336, ctx["s_return"], 7.5, _SC["loop"]))
+    # MED auxiliary streams: seawater feed (in, left), fresh water + brine (out, bottom)
+    f += [
+        f'<path d="M214 284 H250" {FL} stroke="{_SC["sea"]}" marker-end="url(#aSea)"/>',
+        f'<path d="M286 300 V316" {FL} stroke="{_SC["sea"]}" marker-end="url(#aSea)"/>',
+        f'<path d="M320 300 V316" {FL} stroke="{_SC["brine"]}" marker-end="url(#aBr)"/>',
+    ]
+    f.append(_svg_text(212, 280, ctx["s_sw"],    6.5, _SC["sea"], anchor="end"))
+    f.append(_svg_text(280, 328, ctx["s_fresh"], 6.5, _SC["sea"], anchor="middle"))
+    f.append(_svg_text(330, 328, ctx["s_brine"], 6.5, _SC["brine"]))
+    # stream table (heat & material balance) — always shown, both chart + report
+    f += _render_stream_table(ctx["streams"], y0=358)
+    # report-only footer: compact energy balance + stream-colour legend
     if with_panels:
-        f.append(f'<rect x="8" y="380" width="300" height="200" rx="6" fill="#FFFFFF" stroke="#C9D2E0"/>')
-        f.append(f'<rect x="320" y="380" width="206" height="200" rx="6" fill="#FFFFFF" stroke="#C9D2E0"/>')
-        f.append(f'<rect x="538" y="380" width="134" height="200" rx="6" fill="#FFFFFF" stroke="#C9D2E0"/>')
-        f.append(_svg_text(20, 400, "Key results", 10, "#2E4E7E", bold=True))
-        yy = 420
-        for label, val, basis in ctx["results"]:
-            f.append(_svg_text(20, yy, label, 8, "#22303F"))
-            f.append(_svg_text(218, yy, val, 8, "#22303F"))
-            f.append(_svg_text(278, yy, basis, 7.5, _BHEX.get(basis, "#5b6675")))
-            yy += 16
-        f.append(_svg_text(332, 400, "Energy balance & audit", 10, "#2E4E7E", bold=True))
-        yy = 420
-        for head, txt, ok in ctx["balance"]:
+        bx = 12
+        for head, txt, ok in ctx["balance"][:3]:        # Electrical · Cooling · Audit
             col = "#22303F" if ok is None else ("#2E7D4E" if ok else "#C0392B")
-            f.append(_svg_text(332, yy, head, 8, "#2E4E7E", bold=True))
-            f.append(_svg_text(332, yy + 11, txt, 7.2, col))
-            yy += 26
-        f.append(_svg_text(332, yy + 4, ctx["overhead_note"], 6.8, "#5b6675"))
-        f.append(_svg_text(548, 400, "Streams & basis", 10, "#2E4E7E", bold=True))
-        yy = 420
+            f.append(_svg_text(bx, 582, f"{head}", 7.5, "#2E4E7E", bold=True))
+            f.append(_svg_text(bx, 593, txt, 6.8, col))
+            bx += 178
+        lx = 12
         for txt, col in (("steam / heat", _SC["steam"]), ("dielectric coolant", _SC["cool"]),
-                         ("LiBr heat rejection", _SC["rej"]), ("cooling-water return", _SC["loop"])):
-            f.append(f'<line x1="548" y1="{yy-3}" x2="568" y2="{yy-3}" stroke="{col}" stroke-width="2.4"/>')
-            f.append(_svg_text(574, yy, txt, 7.5, "#22303F"))
-            yy += 16
-        yy += 4
-        for b in ("verified", "screening", "input"):
-            f.append(f'<rect x="548" y="{yy-8}" width="8" height="8" fill="{_BHEX[b]}"/>')
-            f.append(_svg_text(562, yy, b, 7.5, "#22303F"))
-            yy += 15
+                         ("LiBr rejection", _SC["rej"]), ("loop return", _SC["loop"]),
+                         ("seawater / fresh", _SC["sea"]), ("brine", _SC["brine"])):
+            f.append(f'<line x1="{lx}" y1="605" x2="{lx+14}" y2="605" stroke="{col}" stroke-width="2.4"/>')
+            f.append(_svg_text(lx + 18, 608, txt, 6.5, "#22303F"))
+            lx += 112
     body = "".join(f)
     return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 {H}" '
             f'font-family="Helvetica,Arial,sans-serif">{body}</svg>')
@@ -337,7 +432,7 @@ def make_pfd_flowable(engine, values, result):
     # small safety margin so the image never overflows the frame.
     fw = LAND[0] - 24 * mm - 14
     fh = LAND[1] - 24 * mm - 14
-    aspect = 680.0 / 600.0
+    aspect = 680.0 / 615.0
     if fw / fh > aspect:                               # height-bound
         h = fh; w = fh * aspect
     else:
