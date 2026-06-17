@@ -222,10 +222,22 @@ def _has_gt_load_link(engine):
     return all(k in keys for k in _GT_LOAD_LINK_KEYS)
 
 
+def _effective_defaults(engine):
+    """The engine's effective defaults: the user-saved 'Default' dataset (if any,
+    persisted per-engine) layered over the code InputSpec defaults. This is what
+    the panel pre-fills on open and what Reset restores. Keys no longer valid for
+    the engine are dropped so a stale saved Default can't inject unknown inputs."""
+    base = engine.defaults()
+    override = _datasets.get_default_params(engine.key) or {}
+    valid = {s.key for s in engine.inputs}
+    base.update({k: v for k, v in override.items() if k in valid})
+    return base
+
+
 def input_fields(engine):
     out = []
     linked_load = _has_gt_load_link(engine)
-    d = engine.defaults()
+    d = _effective_defaults(engine)
     for s in engine.inputs:
         # Skip the "(unit)" suffix for dimensionless inputs so labels
         # like "Operating mode" don't read as "Operating mode  (-)".
@@ -855,7 +867,13 @@ def datasets_panel():
                  style={"display": "flex", "gap": "6px", "marginBottom": "6px"}),
         html.Div([_sbtn("📂 Load", "b-ds-load"),
                   _sbtn("🗑 Delete", "b-ds-delete", danger=True)],
+                 style={"display": "flex", "gap": "6px", "marginBottom": "6px"}),
+        html.Div([_sbtn("⟲ Reset to default", "b-ds-reset")],
                  style={"display": "flex", "gap": "6px"}),
+        html.Div("Save a dataset named “Default” to set this simulator's default "
+                 "parameters; Reset reloads them.",
+                 style={"fontSize": "10px", "color": GREY, "marginTop": "6px",
+                        "lineHeight": "1.3"}),
         html.Div(id="ds-status", style={"fontSize": "11px", "color": GREY,
                                          "marginTop": "7px", "minHeight": "14px"}),
     ], style={"padding": "12px", "border": f"1px solid {LINE}",
@@ -1259,19 +1277,31 @@ def _manage_datasets(_s, _u, _d, engine_key, new_name, selected, values, ids):
         existed = _datasets.exists(engine_key, name)
         _datasets.save_dataset(engine_key, name, cur)
         verb = "Overwrote" if existed else "Saved"
-        return _dataset_options(engine_key), name, f"{verb} dataset '{name}'."
+        note = ""
+        if _datasets.is_default_name(name):           # 'Default' → set simulator default
+            _datasets.set_default_params(engine_key, cur)
+            note = "  — set as this simulator's default parameters."
+        return _dataset_options(engine_key), name, f"{verb} dataset '{name}'.{note}"
 
     if trig == "b-ds-update":
         if not selected:
             return opts, selected, "Select a dataset first, then Update."
         _datasets.save_dataset(engine_key, selected, cur)
-        return _dataset_options(engine_key), selected, f"Updated dataset '{selected}'."
+        note = ""
+        if _datasets.is_default_name(selected):
+            _datasets.set_default_params(engine_key, cur)
+            note = "  — simulator default parameters updated."
+        return _dataset_options(engine_key), selected, f"Updated dataset '{selected}'.{note}"
 
     if trig == "b-ds-delete":
         if not selected:
             return opts, selected, "Select a dataset first, then Delete."
         _datasets.delete_dataset(engine_key, selected)
-        return _dataset_options(engine_key), None, f"Deleted dataset '{selected}'."
+        # Deleting the 'Default' dataset does NOT clear the persisted default
+        # parameters — they remain the simulator default until overwritten.
+        note = (" Default parameters are still retained."
+                if _datasets.is_default_name(selected) else "")
+        return _dataset_options(engine_key), None, f"Deleted dataset '{selected}'.{note}"
 
     return opts, selected, ""
 
@@ -1303,6 +1333,28 @@ def _load_dataset(_n, selected, engine_key, sysin_ids, mat_ids):
 
 
 @app.callback(
+    Output({"type": "sysin",     "key": ALL}, "value", allow_duplicate=True),
+    Output({"type": "sysin-mat", "key": ALL}, "value", allow_duplicate=True),
+    Output("ds-status", "children", allow_duplicate=True),
+    Input("b-ds-reset", "n_clicks"),
+    State("system",         "value"),
+    State({"type": "sysin",     "key": ALL}, "id"),
+    State({"type": "sysin-mat", "key": ALL}, "id"),
+    prevent_initial_call=True)
+def _reset_defaults(_n, engine_key, sysin_ids, mat_ids):
+    """Reset every input to this simulator's default parameters — the user-saved
+    'Default' dataset if one exists, otherwise the code (InputSpec) defaults."""
+    engine = get(engine_key)
+    eff = _effective_defaults(engine)
+    saved = _datasets.get_default_params(engine_key) is not None
+    msg = ("Reset to saved default parameters." if saved
+           else "Reset to built-in default parameters (no 'Default' saved yet).")
+    return (_dataset_sysin_values(sysin_ids, eff),
+            _dataset_mat_values(mat_ids, eff, engine),
+            msg)
+
+
+@app.callback(
     Output("highlights", "children"), Output("results", "children"),
     Output("chart", "src"), Output("last", "data"), Output("banner", "children"),
     Output("status-bar", "children"), Output("smart-section", "children"),
@@ -1315,7 +1367,7 @@ def _run(_n, key, values, ids):
     if values and ids and len(values) == len(engine.inputs):
         vals = {i["key"]: v for i, v in zip(ids, values)}
     else:
-        vals = engine.defaults()
+        vals = _effective_defaults(engine)
     r = engine.solve(vals)
     # Draft-tool notice (if any) goes into the multi-purpose banner; convergence
     # status gets its own dedicated card below so it's not clobbered when the

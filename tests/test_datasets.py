@@ -12,6 +12,7 @@ from nexa_toolkit.framework import datasets as D
 @pytest.fixture(autouse=True)
 def _tmp_store(tmp_path, monkeypatch):
     monkeypatch.setattr(D, "_DIR", tmp_path / "defaults")
+    monkeypatch.setattr(D, "_DEFAULTS_DIR", tmp_path / "engine_defaults")
     yield
 
 
@@ -71,3 +72,42 @@ def test_key_is_filename_safe():
     written = list((D._DIR).glob("*.json"))
     assert len(written) == 1
     assert written[0].name == "evil.json"
+
+
+# ── persistent per-engine DEFAULT parameters ─────────────────────────────────
+
+def test_is_default_name_case_insensitive():
+    assert D.is_default_name("Default")
+    assert D.is_default_name(" default ")
+    assert not D.is_default_name("my dataset")
+    assert not D.is_default_name(None)
+
+
+def test_default_params_set_and_get():
+    assert D.get_default_params("eng_a") is None      # none yet
+    D.set_default_params("eng_a", {"gpu_it_kW": 1234.0, "fw_t_C": 60.0})
+    assert D.get_default_params("eng_a") == {"gpu_it_kW": 1234.0, "fw_t_C": 60.0}
+
+
+def test_default_params_survive_dataset_delete():
+    """The core requirement: deleting the 'Default' dataset must NOT clear the
+    persisted default parameters."""
+    vals = {"a": 1, "b": 2}
+    D.save_dataset("eng_a", "Default", vals)
+    D.set_default_params("eng_a", vals)
+    D.delete_dataset("eng_a", "Default")
+    assert D.list_datasets("eng_a") == []             # the dataset is gone
+    assert D.get_default_params("eng_a") == vals      # but the default persists
+
+
+def test_default_params_independent_per_engine():
+    D.set_default_params("eng_a", {"x": 1})
+    assert D.get_default_params("eng_a") == {"x": 1}
+    assert D.get_default_params("eng_b") is None       # each GT simulator separate
+
+
+def test_clear_default_params():
+    D.set_default_params("eng_a", {"x": 1})
+    assert D.clear_default_params("eng_a") is True
+    assert D.get_default_params("eng_a") is None
+    assert D.clear_default_params("eng_a") is False    # already gone

@@ -18,13 +18,60 @@ import os
 import pathlib
 
 _DIR = pathlib.Path(os.path.expanduser("~/.enginetools/defaults"))
+# Persistent per-engine DEFAULT parameters — kept in a separate store from the
+# named-dataset list, so deleting the "Default" dataset leaves these intact.
+_DEFAULTS_DIR = pathlib.Path(os.path.expanduser("~/.enginetools/engine_defaults"))
+
+# The reserved dataset name that doubles as "set the simulator default".
+DEFAULT_DATASET_NAME = "Default"
+
+
+def is_default_name(name) -> bool:
+    """True if `name` is the reserved 'Default' dataset (case-insensitive)."""
+    return str(name or "").strip().casefold() == DEFAULT_DATASET_NAME.casefold()
+
+
+def _safe(engine_key: str) -> str:
+    # engine keys are lowercase/underscore by contract; guard anyway so a stray
+    # key can't escape the directory.
+    return "".join(c for c in str(engine_key) if c.isalnum() or c in ("_", "-"))
 
 
 def _file(engine_key: str) -> pathlib.Path:
-    # engine keys are lowercase/underscore by contract; guard anyway so a stray
-    # key can't escape the defaults directory.
-    safe = "".join(c for c in str(engine_key) if c.isalnum() or c in ("_", "-"))
-    return _DIR / f"{safe}.json"
+    return _DIR / f"{_safe(engine_key)}.json"
+
+
+def _default_param_file(engine_key: str) -> pathlib.Path:
+    return _DEFAULTS_DIR / f"{_safe(engine_key)}.json"
+
+
+def set_default_params(engine_key: str, values: dict) -> None:
+    """Persist `values` as this engine's DEFAULT parameters. Independent of the
+    named-dataset list — deleting the 'Default' dataset does not clear these."""
+    _DEFAULTS_DIR.mkdir(parents=True, exist_ok=True)
+    _default_param_file(engine_key).write_text(
+        json.dumps(dict(values), indent=2, sort_keys=True), encoding="utf-8")
+
+
+def get_default_params(engine_key: str):
+    """The persisted default-parameter dict for this engine, or None if never set."""
+    f = _default_param_file(engine_key)
+    if not f.exists():
+        return None
+    try:
+        data = json.loads(f.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
+def clear_default_params(engine_key: str) -> bool:
+    """Forget this engine's persisted default parameters (revert to code defaults)."""
+    f = _default_param_file(engine_key)
+    if f.exists():
+        f.unlink()
+        return True
+    return False
 
 
 def _read(engine_key: str) -> dict:
