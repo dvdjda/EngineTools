@@ -12,7 +12,8 @@ import pytest
 import nexa_toolkit.engines                       # noqa: registers engines
 from nexa_toolkit.framework import get
 from nexablock.blocks import (GasTurbine, DieselGenset, Radiator,
-                              CoolingTowerLoop, DoubleEffectLiBrChiller)
+                              CoolingTowerLoop, DoubleEffectLiBrChiller,
+                              LiBrChiller)
 
 
 @pytest.fixture(scope="module")
@@ -81,6 +82,26 @@ def test_backup_failure_modes_keep_m7_closed(e):
         fails = [c.name for c in r["audit"].failed()]
         assert not any(n.startswith("M7") for n in fails), (ov, fails)
         assert r["feasibility"].feasible
+
+
+def test_libr_failed_chiller_block_reports_zero_cooling(e):
+    """LiBr failure is now in the SOLVE, not just an assessment: the chiller
+    block reports 0 cooling and the tower carries the full GPU heat."""
+    r = e.solve(dict(e.defaults(), operating_mode=1, gpu_it_kW=1000, libr_status=1))
+    lb = next(x for x in r["solved"].blocks if isinstance(x, LiBrChiller))
+    assert lb.results["Cooling capacity kW"].value == 0.0
+    b = r["resilience"]
+    assert b["libr_cooling_kW"] == 0.0
+    assert abs(b["tower_topup_kW"] - b["gpu_heat_kW"]) < 1.0
+
+
+def test_cooling_duty_shared_sums_to_gpu_heat(e):
+    """GT failure (diesel, LiBr ok): the diesel-LiBr and the cooling-tower top-up
+    each carry part of the load, summing to the GPU heat."""
+    r = e.solve(dict(e.defaults(), operating_mode=1, gpu_it_kW=1000, gt_status=1))
+    b = r["resilience"]
+    assert b["libr_cooling_kW"] > 0 and b["tower_topup_kW"] > 0
+    assert abs(b["libr_cooling_kW"] + b["tower_topup_kW"] - b["gpu_heat_kW"]) < 1.0
 
 
 def test_resilience_kpis_always_finite(e):

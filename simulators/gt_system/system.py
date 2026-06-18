@@ -151,7 +151,7 @@ def build_gt_system(p: GTSystemParams) -> SolvedSystem:
                 cop=p.libr_cop, chw_sup_C=p.gpu_t_in_C, chw_dt_K=_coolant_dt,
                 chw_cp=p.coolant_cp, pump_frac=p.libr_pump_frac,
                 reject_t_C=p.libr_reject_t_C, reject_return_C=p.fw_t_C,
-                tower_backup=(p.heat_reject == "tower")))
+                tower_backup=(p.heat_reject == "tower"), failed=p.libr_failed))
 
     gpu     = sys.add(GPUCassette(
                 n_gpu=1, p_gpu_kW=p.gpu_it_kW,   # 1 virtual cassette = whole DC

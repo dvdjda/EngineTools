@@ -42,7 +42,8 @@ class LiBrChiller(Block):
                  pump_frac:  float = 0.015,             # 1.5% of cooling (screening)
                  reject_t_C: float = 95.0,              # hot cooling-loop temperature
                  reject_return_C: float = 80.0,         # loop cold side (HRSG return set-point)
-                 tower_backup: bool = False) -> None:   # Backup engine: full pump flow, temp floats
+                 tower_backup: bool = False,            # Backup engine: full pump flow
+                 failed: bool = False) -> None:         # Backup engine: chiller tripped → 0 cooling
         super().__init__()
         self._cop       = cop
         self._chw_sup   = chw_sup_C + 273.15
@@ -52,6 +53,7 @@ class LiBrChiller(Block):
         self._reject_t  = reject_t_C + 273.15
         self._reject_ret= reject_return_C + 273.15
         self._tower_backup = tower_backup
+        self._failed       = failed
 
     def _build_params(self) -> dict[str, Param]:
         return {
@@ -93,7 +95,10 @@ class LiBrChiller(Block):
 
         h_cond_100 = _props.h_sat_liq(_P_ATM)              # J/kg  condensate at 100°C (saturated liquid; h_water at T_sat picks vapour)
         q_gen      = s.mdot * (s.h - h_cond_100)           # W
-        q_cool     = q_gen * cop                            # W
+        # Failed chiller (Backup engine): the absorption cycle trips — it still
+        # condenses the steam (→ rejection → MED) but produces ZERO chilling; the
+        # cooling tower carries the GPU cooling instead.
+        q_cool     = 0.0 if self._failed else q_gen * cop  # W
         q_cond_ct  = q_gen + q_cool                        # W
 
         # CHW flow + supply temperature.

@@ -142,6 +142,21 @@ def pfd_context(engine, values, result) -> dict | None:
     if _libr_failed:
         libr_name = "2x LiBr — FAILED"
 
+    # Cooling-tower GPU-cooling duty + utilisation (from the resilience layer):
+    # 0 when the LiBr carries it all, the top-up share on a GT-failure diesel run,
+    # the full GPU heat when the LiBr has failed.
+    _b = result.get("resilience") or {}
+    _backup = bool(_b)
+    _tower_gpu  = _b.get("tower_topup_kW", 0.0)
+    _gpu_heat   = _b.get("gpu_heat_kW", 0.0) or 1.0
+    _tower_util = 100.0 * _tower_gpu / _gpu_heat
+    _libr_share = qcool                                  # LiBr's own cooling (0 if failed)
+    libr_line2  = "tripped — 0 cooling" if _libr_failed else f"COP {values.get('libr_cop',0):.2f}"
+    if _backup:
+        rad_line3 = f"GPU cooling {_tower_gpu:,.0f} kW · {_tower_util:.0f}% of load"
+    else:
+        rad_line3 = f"duty {rad_duty:,.0f} kW · {rad_split:.0f}% open"
+
     return {
         "title": "Nexa Block v1 — GT system energy balance",
         "design": (f"Design point:  GT {values.get('p_rated_kW',0)/1000:.0f} MW · "
@@ -157,16 +172,15 @@ def pfd_context(engine, values, result) -> dict | None:
         "gt":   [pm_name, f"{pm_mw:.0f} MW · {pm_eff:.0f}%",
                  f"load {load_pct:.1f}%  ·  {gt_actual:,.0f} kWe"],
         "backup_note": backup_note,
+        "libr_failed": _libr_failed,
         "hrsg": ["HRSG", f"{values.get('hrsg_eff_pct',0):.0f}% eff",
                  f"{k.get('Steam generation t/h',0):.2f} t/h"],
-        "libr": [libr_name, f"COP {values.get('libr_cop',0):.2f}",
-                 f"Qcool {qcool:,.0f} kW"],
+        "libr": [libr_name, libr_line2, f"Qcool {qcool:,.0f} kW"],
         "gpu":  ["GPU cassette", f"{it:,.0f} kWe IT  (PUE {values.get('cassette_pue',1.0):.2f})",
                  f"+{cassette:.0f} kW overhead"],
         "med":  ["MED Desalination", "rejection-driven",
                  f"{med_water:,.0f} m³/day"],
-        "rad":  [rej_name, f"approach {values.get('radiator_approach_K',15):.0f} K",
-                 f"duty {rad_duty:,.0f} kW · {rad_split:.0f}% open"],
+        "rad":  [rej_name, f"approach {values.get('tower_approach_K',15):.0f} K", rad_line3],
         # stream labels
         "s_exhaust": f"exhaust · ~{exh:,.0f} kW",
         "s_steam":   f"all steam · {values.get('steam_p_bar',0):.0f} bar",
@@ -412,6 +426,12 @@ def pfd_svg(ctx: dict, with_panels: bool = True) -> str:
         f.append(_svg_box(kk, ctx[kk]))
     if split:
         f.append(_svg_text(287, 86, "3-way", 6, _SC["steam"], anchor="middle"))
+    if ctx.get("libr_failed"):
+        # LiBr bypassed: the cooling tower cools the GPU dielectric directly.
+        f.append(f'<path d="M564 268 H600 V120 H558" {FL} stroke="{_SC["cool"]}" '
+                 f'stroke-dasharray="5 3" marker-end="url(#aC)"/>')
+        f.append(_svg_text(606, 175, "dielectric cooled", 6, _SC["cool"]))
+        f.append(_svg_text(606, 184, "by tower (LiBr out)", 6, _SC["cool"]))
     # header
     f.append(_svg_text(12, 22, ctx["title"], 15, "#2E4E7E", bold=True))
     f.append(_svg_text(12, 40, ctx["design"], 8, "#5b6675"))
