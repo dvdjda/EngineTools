@@ -127,3 +127,30 @@ class Radiator(Block):
                 value=split, lo=0.0, hi=100.0, unit="%",
                 affects=["LiBr cooling capacity"]),
         ]
+
+
+class CoolingTowerLoop(Radiator):
+    """Wet cooling tower on the closed cooling-water loop — the Backup engine's
+    heat-reject sink in place of the dry radiator. Same loop interface and 3-way
+    trim, but it rejects to the WET-BULB (lower than dry-bulb → can hold a lower
+    return) and consumes evaporative make-up water (which the MED supplies/banks).
+    """
+    label = "Cooling Tower"
+    _H_FG = 2257.0   # kJ/kg latent heat ~ evaporation
+    _BLOWDOWN = 1.3  # make-up = evaporation × (1 + drift/blowdown)
+
+    def __init__(self,
+                 t_wb_C:     float = 25.0,     # wet-bulb (not dry-bulb)
+                 approach_K: float = 5.0,      # tighter approach than a dry radiator
+                 t_return_C: float = 80.0,
+                 fan_frac:   float = 0.02) -> None:
+        super().__init__(t_ambient_C=t_wb_C, approach_K=approach_K,
+                         t_return_C=t_return_C, fan_frac=fan_frac)
+
+    def compute(self) -> None:
+        super().compute()
+        duty_kW = self.results["Radiator duty"].value          # heat rejected
+        makeup_m3h = (duty_kW / self._H_FG) * self._BLOWDOWN * 3.6   # kg/s→m³/h (rho~1000)
+        self._result("Wet-bulb temp",        self._p("t_amb") - 273.15, "°C", "input")
+        self._result("Cooling-tower make-up", makeup_m3h, "m³/h", "screening",
+                     "evaporation + blowdown (≈ duty / h_fg × 1.3)")

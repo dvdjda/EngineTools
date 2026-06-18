@@ -34,6 +34,26 @@ _NG_LHV   = 50_050e3     # J/kg
 _EXH_FRAC = 0.85         # exhaust share of waste heat (matches GasTurbine block)
 
 
+def active_pm(p) -> dict:
+    """The active prime mover: the GT in normal operation, or the diesel genset
+    when the GT has failed (Backup engine). Single source of truth for rating /
+    efficiency / exhaust / de-rate, shared by the controller and build_gt_system."""
+    if getattr(p, "gt_failed", False):
+        return dict(is_diesel=True, label="Diesel Genset",
+                    rated_kW=p.diesel_rated_kW, eff=p.diesel_eff,
+                    exhaust_C=p.diesel_exhaust_C, exh_frac=p.diesel_exh_frac,
+                    slope=0.003, ref_C=25.0, floor=0.80)
+    return dict(is_diesel=False, label="Gas Turbine",
+                rated_kW=p.p_rated_kW, eff=p.gt_eff,
+                exhaust_C=p.t_exhaust_C, exh_frac=_EXH_FRAC,
+                slope=0.007, ref_C=15.0, floor=0.50)
+
+
+def _pm_derate(p, t_amb_K: float) -> float:
+    pm = active_pm(p)
+    return max(pm["floor"], 1.0 - pm["slope"] * max(0.0, t_amb_K - (pm["ref_C"] + 273.15)))
+
+
 def med_loop_cold_C(p) -> float:
     """The temperature MED cools the captured loop branch down to.
     Manual: the HRSG return set-point (fw_t_C) — MED never over-cools.
@@ -75,12 +95,13 @@ def _hrsg_steam_kgps(p, load_pct: float, t_amb_K: float) -> float:
     """Analytical: HRSG steam mass flow at the given load_pct.
     Mirrors GasTurbine + HRSG block physics so the pre-solve guess is
     consistent with what the solver will compute."""
-    derate   = max(0.50, 1.0 - 0.007 * max(0.0, t_amb_K - 288.15))
-    p_derate = p.p_rated_kW * derate                         # kW
+    pm       = active_pm(p)
+    derate   = _pm_derate(p, t_amb_K)
+    p_derate = pm["rated_kW"] * derate                       # kW
     p_gt     = p_derate * load_pct / 100.0
-    fuel_kW  = p_gt / max(p.gt_eff, 1e-6)
+    fuel_kW  = p_gt / max(pm["eff"], 1e-6)
     waste_kW = fuel_kW - p_gt
-    exh_kW   = waste_kW * _EXH_FRAC
+    exh_kW   = waste_kW * pm["exh_frac"]
     hrsg_kW  = exh_kW * (p.hrsg_eff_pct / 100.0)
 
     p_st_Pa  = p.steam_p_bar * 1e5
@@ -137,8 +158,8 @@ def _aux_loads_kW(p, load_pct: float,
     so the controller's setpoint matches what the real solve will compute.
     GT aux is the internal GT de-rate (kept separate). No steam splitter — all
     steam → LiBr; MED is rejection-driven."""
-    derate   = max(0.50, 1.0 - 0.007 * max(0.0, (p.t_ambient_C + 273.15) - 288.15))
-    p_derate = p.p_rated_kW * derate
+    derate   = _pm_derate(p, p.t_ambient_C + 273.15)
+    p_derate = active_pm(p)["rated_kW"] * derate
     gt_aux   = p.gt_aux_frac * p_derate
     eta      = p.pump_eta
 
@@ -198,8 +219,8 @@ def control_setpoints(p, max_iter: int = 8,
     """
     gpu_heat_kW = p.gpu_it_kW * p.cassette_pue                # immersion: all elec → heat
     t_amb_K     = p.t_ambient_C + 273.15
-    derate      = max(0.50, 1.0 - 0.007 * max(0.0, t_amb_K - 288.15))
-    p_derate    = p.p_rated_kW * derate
+    derate      = _pm_derate(p, t_amb_K)
+    p_derate    = active_pm(p)["rated_kW"] * derate
 
     # Steam demand for LiBr-priority cooling — invariant to load_pct.
     libr_steam_kgps = _libr_steam_demand_kgps(p, gpu_heat_kW)

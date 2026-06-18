@@ -64,9 +64,9 @@ def _mode_name(engine, key, val) -> str:
 def pfd_context(engine, values, result) -> dict | None:
     if not _is_gt_system(result):
         return None
-    from nexablock.blocks import (GasTurbine, HRSG, LiBrChiller,
+    from nexablock.blocks import (GasTurbine, DieselGenset, HRSG, LiBrChiller,
                                    DoubleEffectLiBrChiller, GPUCassette,
-                                   MED, Radiator, Calorifier)
+                                   MED, Radiator, CoolingTowerLoop, Calorifier)
     solved = result["solved"]
     k = result.get("kpis", {})
 
@@ -123,6 +123,25 @@ def pfd_context(engine, values, result) -> dict | None:
     _is_de = any(isinstance(b, DoubleEffectLiBrChiller) for b in solved.blocks)
     libr_name = "2x LiBr (DE)" if _is_de else "LiBr Chiller"
 
+    # Backup engine: prime mover may be the diesel; reject may be the cooling tower.
+    _pm_block  = next((b for b in solved.blocks if isinstance(b, GasTurbine)), None)
+    _on_diesel = isinstance(_pm_block, DieselGenset)
+    pm_name    = "Diesel Genset" if _on_diesel else "Gas Turbine"
+    pm_mw  = (values.get("diesel_rated_kW", 1500) if _on_diesel else values.get("p_rated_kW", 0)) / 1000.0
+    pm_eff = (values.get("diesel_eff", 0.40) if _on_diesel else values.get("gt_eff", 0)) * 100.0
+    _rej_block = next((b for b in solved.blocks if isinstance(b, Radiator)), None)
+    rej_name   = "Cooling Tower" if isinstance(_rej_block, CoolingTowerLoop) else "Radiator (fans)"
+    _params    = getattr(solved, "params", None)
+    _libr_failed = bool(getattr(_params, "libr_failed", False))
+    backup_note = None
+    if _on_diesel or _libr_failed:
+        bits = []
+        if _on_diesel:    bits.append("GT FAILED → diesel")
+        if _libr_failed:  bits.append("LiBr FAILED → tower")
+        backup_note = "BACKUP: " + " · ".join(bits)
+    if _libr_failed:
+        libr_name = "2x LiBr — FAILED"
+
     return {
         "title": "Nexa Block v1 — GT system energy balance",
         "design": (f"Design point:  GT {values.get('p_rated_kW',0)/1000:.0f} MW · "
@@ -135,8 +154,9 @@ def pfd_context(engine, values, result) -> dict | None:
         "mode_op": _mode_name(engine, "operating_mode", values.get("operating_mode", 0)),
         "mode_gt": _mode_name(engine, "gt_power_mode",  values.get("gt_power_mode", 0)),
         # block labels
-        "gt":   ["Gas Turbine", f"{values.get('p_rated_kW',0)/1000:.0f} MW · {values.get('gt_eff',0)*100:.0f}%",
+        "gt":   [pm_name, f"{pm_mw:.0f} MW · {pm_eff:.0f}%",
                  f"load {load_pct:.1f}%  ·  {gt_actual:,.0f} kWe"],
+        "backup_note": backup_note,
         "hrsg": ["HRSG", f"{values.get('hrsg_eff_pct',0):.0f}% eff",
                  f"{k.get('Steam generation t/h',0):.2f} t/h"],
         "libr": [libr_name, f"COP {values.get('libr_cop',0):.2f}",
@@ -145,7 +165,7 @@ def pfd_context(engine, values, result) -> dict | None:
                  f"+{cassette:.0f} kW overhead"],
         "med":  ["MED Desalination", "rejection-driven",
                  f"{med_water:,.0f} m³/day"],
-        "rad":  ["Radiator (fans)", f"approach {values.get('radiator_approach_K',15):.0f} K",
+        "rad":  [rej_name, f"approach {values.get('radiator_approach_K',15):.0f} K",
                  f"duty {rad_duty:,.0f} kW · {rad_split:.0f}% open"],
         # stream labels
         "s_exhaust": f"exhaust · ~{exh:,.0f} kW",
@@ -400,6 +420,8 @@ def pfd_svg(ctx: dict, with_panels: bool = True) -> str:
     f.append(_svg_text(614, 26, "GRID-TIED" if ctx["grid"] else "ISLAND", 10.5,
                        "#FFFFFF", anchor="middle", bold=True))
     f.append(_svg_text(672, 44, f"GT power · {ctx['mode_gt']}", 7.5, "#5b6675", anchor="end"))
+    if ctx.get("backup_note"):
+        f.append(_svg_text(672, 56, ctx["backup_note"], 8, _SC["rej"], anchor="end", bold=True))
     # stream labels (in clear whitespace)
     f.append(_svg_text(132, 64, ctx["s_exhaust"], 7, _SC["steam"], anchor="middle"))
     f.append(_svg_text(287, 64, ctx["s_steam"],   7, _SC["steam"], anchor="middle"))

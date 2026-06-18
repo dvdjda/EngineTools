@@ -72,6 +72,8 @@ Alphabetical reference for every term used across the codebase, reports, and UI.
 
 **`gt_system_v2_loadsweep`** — A screening variant of `gt_system_v2` that runs a 50–100 % GT-load sweep in the chart slot instead of the SVG flowsheet.
 
+**`gt_system_v2_de_backup`** — *(draft)* The double-effect engine plus a Tier-3 standby architecture: a **DieselGenset** that takes over as prime mover on a **GT-failure** switch (its ~480 °C exhaust still drives the double-effect chiller; the tower covers the rest); a **wet cooling tower** (`CoolingTowerLoop`) replacing the dry radiator (normal reject + top-up, and full GPU cooling on a **LiBr-failure** switch, scaled to wet-bulb); diesel + fresh-water storage; and **resilience KPIs** — diesel fuel autonomy vs a backup-hours target, fresh-water buffer (MED banks it, tower make-up draws it), **UPS** electrical ride-through and **thermal-accumulator** cooling ride-through (do they cover the diesel/tower start?). GT-failure is fully solved (diesel swap); LiBr-failure is a resilience what-if (the steady-state solve still runs the chiller, the KPIs report the tower-full requirement). Computed in `simulators/gt_system/backup.py`.
+
 **Heat load** — In the GPU cassette, `q_W = IT + cassette_overhead`. Equals the GPU's total electrical draw (immersion physics: all electrical → heat). Drives the cooling demand.
 
 **HRSG — Heat Recovery Steam Generator** — The block that converts GT exhaust heat into steam. Effectiveness `hrsg_eff_pct` typically 75–90 %. Generates steam at `T_sat(P_steam) + 30°C` superheat.

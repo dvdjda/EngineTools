@@ -37,7 +37,11 @@ class GasTurbine(Block):
                  gt_eff:       float = 0.35,
                  t_ambient_C:  float = 25.0,
                  t_exhaust_C:  float = 530.0,
-                 aux_frac:     float = 0.010) -> None:    # 1.0% of derated capacity
+                 aux_frac:     float = 0.010,             # 1.0% of derated capacity
+                 exh_frac:     float = _EXH_FRAC,         # exhaust share of waste heat
+                 derate_slope: float = 0.007,             # per-°C derate above ref
+                 derate_ref_C: float = 15.0,              # ambient where derate = 1.0
+                 derate_floor: float = 0.50) -> None:     # minimum derate factor
         super().__init__()
         self._p_rated  = p_rated_kW * 1e3
         self._load_pct = load_pct
@@ -45,16 +49,25 @@ class GasTurbine(Block):
         self._t_amb    = t_ambient_C + 273.15
         self._t_exh    = t_exhaust_C + 273.15
         self._aux_frac = aux_frac
+        self._exh_frac = exh_frac
+        self._derate_slope = derate_slope
+        self._derate_ref_K = derate_ref_C + 273.15
+        self._derate_floor = derate_floor
 
     def _build_params(self) -> dict[str, Param]:
         return {
-            "p_rated_W": Param(self._p_rated,  "W",   desc="GT ISO rated power"),
+            "p_rated_W": Param(self._p_rated,  "W",   desc="ISO rated power"),
             "load_pct":  Param(self._load_pct, "%",   min=10, max=100),
-            "gt_eff":    Param(self._gt_eff,   "-",   min=0.15, max=0.45),
+            "gt_eff":    Param(self._gt_eff,   "-",   min=0.15, max=0.50),
             "t_amb_K":   Param(self._t_amb,    "K",   desc="Ambient temperature"),
             "t_exh_K":   Param(self._t_exh,    "K",   desc="Exhaust gas temperature"),
             "aux_frac":  Param(self._aux_frac, "-",   min=0.0, max=0.05,
-                                desc="GT auxiliary electrical as fraction of derated capacity"),
+                                desc="Auxiliary electrical as fraction of derated capacity"),
+            "exh_frac":  Param(self._exh_frac, "-",   min=0.2, max=0.95,
+                                desc="Fraction of waste heat carried by the exhaust"),
+            "derate_slope": Param(self._derate_slope, "1/K", min=0.0, max=0.02),
+            "derate_ref_K": Param(self._derate_ref_K, "K"),
+            "derate_floor": Param(self._derate_floor, "-",   min=0.3, max=1.0),
         }
 
     def _build_inlets(self) -> dict[str, Port]:
@@ -71,15 +84,17 @@ class GasTurbine(Block):
         t_amb = self._p("t_amb_K");  t_exh = self._p("t_exh_K")
         eff   = max(self._p("gt_eff"), 1e-6)
 
-        derate   = max(0.50, 1.0 - 0.007 * max(0.0, t_amb - 288.15))
+        exh_frac = self._p("exh_frac")
+        derate   = max(self._p("derate_floor"),
+                       1.0 - self._p("derate_slope") * max(0.0, t_amb - self._p("derate_ref_K")))
         p_derate = self._p("p_rated_W") * derate
         p_gt     = p_derate * self._p("load_pct") / 100.0
 
         fuel_W       = p_gt / eff
         ng_kgps      = fuel_W / _NG_LHV
         waste_heat_W = fuel_W - p_gt
-        exh_heat_W   = waste_heat_W * _EXH_FRAC
-        gt_cw_W      = waste_heat_W * (1.0 - _EXH_FRAC)
+        exh_heat_W   = waste_heat_W * exh_frac
+        gt_cw_W      = waste_heat_W * (1.0 - exh_frac)
 
         cp_exh       = _props.cp_exhgas(t_exh)           # J/kg·K
         dt_exh       = max(t_exh - t_amb, 1.0)
@@ -161,3 +176,37 @@ class GasTurbine(Block):
                 detail=f"actual={p_actual:.0f} kW ≤ derated={p_derate:.0f} kW",
                 category="Plausibility", affects=["GT actual power"]),
         ]
+
+
+class DieselGenset(GasTurbine):
+    """Standby diesel generator — the Tier-3 backup prime mover. Same package
+    interface as the gas turbine (exhaust → HRSG, electrical bus), so it drops
+    into the flowsheet when the GT has failed. Screening differences:
+      • ~40% electrical efficiency;
+      • hot exhaust (~480°C) but a smaller exhaust share (~26%) — still hot
+        enough to raise 10-bar steam and drive the double-effect chiller;
+      • a mild ambient de-rate (engines hold output in hot ambients).
+    Reference: ISO 8528 / ISO 3046 reciprocating genset performance.
+    """
+    label = "Diesel Genset"
+
+    def __init__(self,
+                 p_rated_kW:   float = 1500.0,
+                 load_pct:     float = 85.0,
+                 gt_eff:       float = 0.40,
+                 t_ambient_C:  float = 25.0,
+                 t_exhaust_C:  float = 480.0,
+                 aux_frac:     float = 0.010,
+                 exh_frac:     float = 0.26,
+                 derate_slope: float = 0.003,
+                 derate_ref_C: float = 25.0,
+                 derate_floor: float = 0.80) -> None:
+        super().__init__(
+            p_rated_kW=p_rated_kW, load_pct=load_pct, gt_eff=gt_eff,
+            t_ambient_C=t_ambient_C, t_exhaust_C=t_exhaust_C, aux_frac=aux_frac,
+            exh_frac=exh_frac, derate_slope=derate_slope,
+            derate_ref_C=derate_ref_C, derate_floor=derate_floor)
+
+    def references(self):
+        return [Reference("ISO 8528 Reciprocating IC engine driven generating sets",
+                          kind="standard")]

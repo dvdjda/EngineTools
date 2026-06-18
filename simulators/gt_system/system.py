@@ -19,10 +19,10 @@ if _ROOT not in sys.path:
 
 from nexablock.core.stream  import Stream, StreamKind
 from nexablock.core.system  import System, SolvedSystem
-from nexablock.blocks       import (GasTurbine, HRSG, LiBrChiller,
+from nexablock.blocks       import (GasTurbine, DieselGenset, HRSG, LiBrChiller,
                                      DoubleEffectLiBrChiller, MED,
-                                     GPUCassette, Radiator, SteamSplitter,
-                                     Calorifier, Mixer)
+                                     GPUCassette, Radiator, CoolingTowerLoop,
+                                     SteamSplitter, Calorifier, Mixer)
 
 
 @dataclass
@@ -33,6 +33,22 @@ class GTSystemParams:
     gt_eff:       float = 0.35
     t_ambient_C:  float = 25.0
     t_exhaust_C:  float = 530.0
+    # ── Backup / resilience (Tier-3) — only the Backup engine sets these ───────
+    gt_failed:        bool  = False        # GT trip → diesel genset takes over
+    libr_failed:      bool  = False        # LiBr trip → cooling tower carries full GPU cooling
+    heat_reject:      str   = "radiator"   # "radiator" (dry) | "tower" (wet cooling tower)
+    diesel_rated_kW:  float = 1500.0
+    diesel_eff:       float = 0.40
+    diesel_exhaust_C: float = 480.0
+    diesel_exh_frac:  float = 0.26
+    tower_wetbulb_C:  float = 25.0         # wet-bulb for the cooling tower
+    tower_approach_K: float = 5.0
+    diesel_tank_m3:        float = 25.0    # standby fuel storage
+    water_tank_m3:         float = 250.0   # backup fresh-water storage (MED banks it)
+    backup_hours_target:   float = 72.0    # Tier-3 autonomy target
+    ups_kwh:               float = 150.0   # UPS battery usable energy
+    accumulator_m3:        float = 15.0    # chilled/dielectric thermal accumulator
+    dielectric_inventory_m3: float = 8.0   # immersion-loop dielectric (bare ride-through)
     # HRSG.  fw_t_C is the feedwater / loop return set-point (the radiator + MED
     # bypass blend the cooling loop back to this temperature).
     hrsg_eff_pct: float = 85.0
@@ -106,16 +122,22 @@ def build_gt_system(p: GTSystemParams) -> SolvedSystem:
     Stashes resolved control state on the SolvedSystem as `.control` for
     downstream renderers (feasibility, audit, reports).
     """
-    from .control import control_setpoints, med_bypass_fraction, med_loop_cold_C
+    from .control import (control_setpoints, med_bypass_fraction,
+                          med_loop_cold_C, active_pm)
     cs = control_setpoints(p)
+    pm = active_pm(p)
 
     sys = System("GT System — GT + HRSG + LiBr + GPU + MED")
 
     # ── Instantiate blocks ────────────────────────────────────────────────────
-    gt      = sys.add(GasTurbine(
-                p_rated_kW=p.p_rated_kW, load_pct=cs.load_pct,
-                gt_eff=p.gt_eff, t_ambient_C=p.t_ambient_C,
-                t_exhaust_C=p.t_exhaust_C, aux_frac=p.gt_aux_frac))
+    # Prime mover: GT in normal operation, diesel genset when the GT has failed.
+    _PMCls = DieselGenset if pm["is_diesel"] else GasTurbine
+    gt      = sys.add(_PMCls(
+                p_rated_kW=pm["rated_kW"], load_pct=cs.load_pct,
+                gt_eff=pm["eff"], t_ambient_C=p.t_ambient_C,
+                t_exhaust_C=pm["exhaust_C"], aux_frac=p.gt_aux_frac,
+                exh_frac=pm["exh_frac"], derate_slope=pm["slope"],
+                derate_ref_C=pm["ref_C"], derate_floor=pm["floor"]))
 
     hrsg    = sys.add(HRSG(
                 hrsg_eff_pct=p.hrsg_eff_pct,
@@ -141,7 +163,13 @@ def build_gt_system(p: GTSystemParams) -> SolvedSystem:
                 bypass_frac=med_bypass_fraction(p),
                 loop_cold_C=med_loop_cold_C(p)))
 
-    rad     = sys.add(Radiator(
+    # Heat-reject sink: dry radiator (default) or wet cooling tower (Backup engine).
+    if p.heat_reject == "tower":
+        rad = sys.add(CoolingTowerLoop(
+                t_wb_C=p.tower_wetbulb_C, approach_K=p.tower_approach_K,
+                t_return_C=p.fw_t_C))
+    else:
+        rad = sys.add(Radiator(
                 t_ambient_C=p.t_ambient_C, approach_K=p.radiator_approach_K,
                 t_return_C=p.fw_t_C, fan_frac=p.ct_fan_frac))
 
