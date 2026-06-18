@@ -21,9 +21,9 @@ def e():
     return get("gt_system_v2_de_backup")
 
 
-def test_backup_engine_registered_draft(e):
+def test_backup_engine_registered_trusted(e):
     assert e.name.endswith("+ Backup)")
-    assert e.status == "draft"
+    assert e.status == "trusted"        # promoted by David
 
 
 def test_normal_uses_gt_and_cooling_tower(e):

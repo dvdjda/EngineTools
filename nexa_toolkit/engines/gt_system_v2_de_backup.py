@@ -10,7 +10,8 @@ Copy of the double-effect engine with the standby architecture added:
     and a thermal accumulator (cooling ride-through), surfaced as resilience KPIs;
   • GT-failure and LiBr-failure switches to simulate each contingency.
 
-Status: draft — screening, unverified. Does NOT touch the other engines.
+Status: trusted — promoted by David. Resilience KPIs stay screening-basis
+(design-sizing estimates). Does NOT touch the other engines.
 """
 from __future__ import annotations
 
@@ -36,11 +37,12 @@ class GTSystemV2DEBackup(GTSystemV2DE):
     key        = "gt_system_v2_de_backup"
     name       = "GT System v2 — nexablock (GT + HRSG + 2xLiBr + GPU + MED + Backup)"
     kind       = "simulator"
-    status     = "draft"
+    status     = "trusted"   # promoted by David
     provenance = ("Copy of gt_system_v2_de with the Tier-3 backup architecture: "
                   "diesel standby genset, wet cooling tower (replacing the dry "
                   "radiator), diesel/water storage, UPS + thermal accumulator "
-                  "ride-through KPIs, and GT/LiBr failure switches. David's spec.")
+                  "ride-through KPIs, and GT/LiBr failure switches. David's spec. "
+                  "Promoted to trusted by David.")
     notes = (
         "Double-effect engine + standby. Switches simulate a GT trip (→ diesel "
         "genset powers IT and drives the LiBr via its exhaust; the cooling tower "
