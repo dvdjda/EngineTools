@@ -72,6 +72,17 @@ def test_tower_direct_cooling_infeasible_at_high_wetbulb(e):
     assert not b["tower_direct_ok"]
 
 
+def test_backup_failure_modes_keep_m7_closed(e):
+    """Fixed-flow dielectric pump + cooling-tower top-up: the GPU coolant mass
+    balance (M7) stays closed in every failure mode (regression — it used to fail
+    -59% when the diesel-LiBr was short and the tower wasn't in the loop)."""
+    for ov in ({"gt_status": 1}, {"libr_status": 1}, {"gt_status": 1, "libr_status": 1}):
+        r = e.solve(dict(e.defaults(), operating_mode=1, gpu_it_kW=1000, **ov))
+        fails = [c.name for c in r["audit"].failed()]
+        assert not any(n.startswith("M7") for n in fails), (ov, fails)
+        assert r["feasibility"].feasible
+
+
 def test_resilience_kpis_always_finite(e):
     """Autonomy / water-buffer are backup DESIGN metrics → always finite, even in
     normal operation (regression: they used to return inf and trip the non-finite

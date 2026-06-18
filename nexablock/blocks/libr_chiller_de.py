@@ -38,10 +38,12 @@ class DoubleEffectLiBrChiller(LiBrChiller):
                  pump_frac:       float = 0.015,
                  reject_t_C:      float = 95.0,
                  reject_return_C: float = 80.0,
-                 min_htg_steam_C: float = 155.0) -> None:   # min steam temp for the HTG
+                 min_htg_steam_C: float = 155.0,            # min steam temp for the HTG
+                 tower_backup:    bool  = False) -> None:
         super().__init__(cop=cop, chw_sup_C=chw_sup_C, chw_dt_K=chw_dt_K,
                          chw_cp=chw_cp, pump_frac=pump_frac,
-                         reject_t_C=reject_t_C, reject_return_C=reject_return_C)
+                         reject_t_C=reject_t_C, reject_return_C=reject_return_C,
+                         tower_backup=tower_backup)
         self._min_htg = min_htg_steam_C + 273.15
 
     def _build_params(self) -> dict[str, Param]:

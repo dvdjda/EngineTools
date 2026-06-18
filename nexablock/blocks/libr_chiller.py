@@ -41,7 +41,8 @@ class LiBrChiller(Block):
                  chw_cp:     float = 4187.0,
                  pump_frac:  float = 0.015,             # 1.5% of cooling (screening)
                  reject_t_C: float = 95.0,              # hot cooling-loop temperature
-                 reject_return_C: float = 80.0) -> None: # loop cold side (HRSG return set-point)
+                 reject_return_C: float = 80.0,         # loop cold side (HRSG return set-point)
+                 tower_backup: bool = False) -> None:   # Backup engine: full pump flow, temp floats
         super().__init__()
         self._cop       = cop
         self._chw_sup   = chw_sup_C + 273.15
@@ -50,6 +51,7 @@ class LiBrChiller(Block):
         self._pump_frac = pump_frac
         self._reject_t  = reject_t_C + 273.15
         self._reject_ret= reject_return_C + 273.15
+        self._tower_backup = tower_backup
 
     def _build_params(self) -> dict[str, Param]:
         return {
@@ -94,16 +96,28 @@ class LiBrChiller(Block):
         q_cool     = q_gen * cop                            # W
         q_cond_ct  = q_gen + q_cool                        # W
 
-        # CHW flow
-        mdot_chw   = q_cool / (chw_cp * chw_dt)            # kg/s
+        # CHW flow + supply temperature.
+        mdot_chw   = q_cool / (chw_cp * chw_dt)            # kg/s (capacity-sized)
+        chw_sup_T  = chw_sup                                # supply temp (K)
         chw_ret_t  = chw_sup + chw_dt                       # K return temp
+        # Backup engine: the dielectric pump moves a FIXED full flow (= the
+        # circulated GPU return) and the cooling tower holds the supply at the
+        # set-point — the chiller does what it can and the tower top-up carries
+        # the rest of the heat (see feasibility.cooling_balance). This keeps the
+        # GPU coolant mass balance (M7) closed in a backup short/failure instead
+        # of the flow collapsing. Off (default) → unchanged capacity-sized flow.
+        ret_s = self._in("chw_return")
+        if self._tower_backup and ret_s is not None and ret_s.mdot:
+            mdot_chw  = ret_s.mdot                          # full pump circulation
+            chw_ret_t = ret_s.T if ret_s.T else (chw_sup + chw_dt)
+            # chw_sup_T stays at the set-point (the tower removes the gap heat)
 
         # Outlets
         self._out_set("condensate", Stream.water_steam(
             mdot=s.mdot, T=373.15, P=_P_ATM,
             h=h_cond_100, label="LiBr condensate"))
         self._out_set("chw_supply", Stream.fluid(
-            mdot=mdot_chw, T=chw_sup, P=3e5, cp=chw_cp, rho=1000.0,
+            mdot=mdot_chw, T=chw_sup_T, P=3e5, cp=chw_cp, rho=1000.0,
             label="CHW supply"))
         # Heat rejection → hot cooling-loop water. mdot sized so the loop carries
         # Q_cond across the (reject_t − return) window. This water drives MED,
@@ -122,7 +136,7 @@ class LiBrChiller(Block):
         self._result("Cooling capacity TR",  q_cool/3517,   "TR",  "verified")
         self._result("Condenser duty",       q_cond_ct/1e3, "kW",  "verified")
         self._result("CHW flow",             mdot_chw*3.6,  "m³/h","verified")
-        self._result("CHW supply temp",      chw_sup-273.15,"°C",  "input")
+        self._result("CHW supply temp",      chw_sup_T-273.15,"°C","verified")
         self._result("CHW return temp",      chw_ret_t-273.15,"°C","verified")
         self._result("COP achieved",         cop,           "-",   "input")
         self._result("LiBr pump electrical", pump_kW,       "kW",  "screening",
