@@ -166,6 +166,10 @@ class LiBrChiller(Block):
         q_cool  = r["Cooling capacity kW"].value
         q_cond  = r["Condenser duty"].value
         cop     = self._p("cop")
+        # Failed chiller (Backup engine): the cycle trips → 0 chilling even though
+        # the generator still condenses steam. The COP→cooling identity (E5) must
+        # see the effective COP (0) so it reads 0 = 0 and stays closed.
+        cop_eff = 0.0 if self._failed else cop
         chw_sup = self._p("chw_sup") - 273.15
         dt_chw  = self._p("chw_dt")
         chw_ret = chw_sup + dt_chw
@@ -177,7 +181,7 @@ class LiBrChiller(Block):
         t_cond_C   = 100.0    # condensate at 1 atm saturation
         return [
             energy_balance("E5: Q_gen · COP = Q_cool",
-                supply=q_gen * cop, demand=q_cool,
+                supply=q_gen * cop_eff, demand=q_cool,
                 affects=["LiBr cooling capacity"], tol_rel=1e-3),
             energy_balance("E6: Q_cond = Q_gen + Q_cool (chiller 1st law)",
                 supply=q_cond, demand=q_gen + q_cool,

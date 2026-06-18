@@ -153,9 +153,21 @@ def pfd_context(engine, values, result) -> dict | None:
     _libr_share = qcool                                  # LiBr's own cooling (0 if failed)
     libr_line2  = "tripped — 0 cooling" if _libr_failed else f"COP {values.get('libr_cop',0):.2f}"
     if _backup:
-        rad_line3 = f"GPU cooling {_tower_gpu:,.0f} kW · {_tower_util:.0f}% of load"
+        # short enough for the 112-px tower box: duty + utilisation only
+        rad_line3 = f"GPU {_tower_gpu:,.0f} kW · {_tower_util:.0f}%"
     else:
         rad_line3 = f"duty {rad_duty:,.0f} kW · {rad_split:.0f}% open"
+
+    # Dielectric (GPU coolant) routing for the PFD, by cooling source:
+    #   "libr"  — LiBr cools the GPU directly (normal / non-backup)
+    #   "both"  — diesel-LiBr cools and the tower tops up (GT-failure backup)
+    #   "tower" — LiBr tripped → the tower carries the whole GPU loop
+    if _libr_failed:
+        diel_mode = "tower"
+    elif _backup and _tower_gpu > 1.0:
+        diel_mode = "both"
+    else:
+        diel_mode = "libr"
 
     return {
         "title": "Nexa Block v1 — GT system energy balance",
@@ -173,6 +185,7 @@ def pfd_context(engine, values, result) -> dict | None:
                  f"load {load_pct:.1f}%  ·  {gt_actual:,.0f} kWe"],
         "backup_note": backup_note,
         "libr_failed": _libr_failed,
+        "diel_mode": diel_mode,
         "hrsg": ["HRSG", f"{values.get('hrsg_eff_pct',0):.0f}% eff",
                  f"{k.get('Steam generation t/h',0):.2f} t/h"],
         "libr": [libr_name, libr_line2, f"Qcool {qcool:,.0f} kW"],
@@ -392,8 +405,6 @@ def pfd_svg(ctx: dict, with_panels: bool = True) -> str:
     # flows
     f += [
         f'<path d="M112 96 H152" {FL} stroke="{_SC["steam"]}" marker-end="url(#aS)"/>',
-        f'<path d="M422 88 H558" {FL} stroke="{_SC["cool"]}" marker-end="url(#aC)"/>',
-        f'<path d="M558 104 H424" {FL} stroke="{_SC["cool"]}" marker-end="url(#aC)"/>',
         f'<path d="M372 120 V179" {FL} stroke="{_SC["rej"]}" marker-end="url(#aR)"/>',
         f'<path d="M364 186 H342 V252" {FL} stroke="{_SC["rej"]}" marker-end="url(#aR)"/>',
         f'<path d="M380 186 H414 V275" {FL} stroke="{_SC["rej"]}" stroke-dasharray="5 3"/>',
@@ -426,12 +437,31 @@ def pfd_svg(ctx: dict, with_panels: bool = True) -> str:
         f.append(_svg_box(kk, ctx[kk]))
     if split:
         f.append(_svg_text(287, 86, "3-way", 6, _SC["steam"], anchor="middle"))
-    if ctx.get("libr_failed"):
-        # LiBr bypassed: the cooling tower cools the GPU dielectric directly.
-        f.append(f'<path d="M564 268 H600 V120 H558" {FL} stroke="{_SC["cool"]}" '
-                 f'stroke-dasharray="5 3" marker-end="url(#aC)"/>')
-        f.append(_svg_text(606, 175, "dielectric cooled", 6, _SC["cool"]))
-        f.append(_svg_text(606, 184, "by tower (LiBr out)", 6, _SC["cool"]))
+    # ── dielectric coolant (GPU loop) — routed by the cooling source ──────────
+    _DC = _SC["cool"]
+    diel = ctx.get("diel_mode", "libr")
+    if diel in ("libr", "both"):
+        f += [
+            f'<path d="M422 88 H558" {FL} stroke="{_DC}" marker-end="url(#aC)"/>',   # supply LiBr→GPU
+            f'<path d="M558 104 H424" {FL} stroke="{_DC}" marker-end="url(#aC)"/>',  # return GPU→LiBr
+        ]
+    if diel == "both":
+        # T-connections: the warm return is tapped down into the tower and the
+        # cooled water rejoins the supply — the tower shares the GPU loop with LiBr.
+        f += [
+            f'<path d="M536 104 V252" {FL} stroke="{_DC}" marker-end="url(#aC)"/>',  # return → tower
+            f'<path d="M480 252 V88"  {FL} stroke="{_DC}" marker-end="url(#aC)"/>',  # tower → supply
+            f'<circle cx="536" cy="104" r="2.6" fill="{_DC}"/>',
+            f'<circle cx="480" cy="88"  r="2.6" fill="{_DC}"/>',
+        ]
+        f.append(_svg_text(508, 248, "tower shares GPU loop", 6, _DC, anchor="middle"))
+    elif diel == "tower":
+        # LiBr out of the loop: the GPU dielectric loops only to the cooling tower.
+        f += [
+            f'<path d="M558 104 H536 V252" {FL} stroke="{_DC}" marker-end="url(#aC)"/>',  # GPU → tower
+            f'<path d="M480 252 V88 H558"  {FL} stroke="{_DC}" marker-end="url(#aC)"/>',  # tower → GPU
+        ]
+        f.append(_svg_text(508, 248, "GPU cooled by tower (LiBr out)", 6, _DC, anchor="middle"))
     # header
     f.append(_svg_text(12, 22, ctx["title"], 15, "#2E4E7E", bold=True))
     f.append(_svg_text(12, 40, ctx["design"], 8, "#5b6675"))
