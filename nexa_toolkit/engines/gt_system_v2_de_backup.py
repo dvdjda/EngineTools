@@ -25,6 +25,11 @@ from .gt_system_v2_de import GTSystemV2DE, _params_double
 
 _FAIL = {0: False, 1: True}
 
+# The wet cooling tower supersedes the dry radiator, so its two design knobs are
+# dropped from the Backup engine's inputs (the cooling-tower wet-bulb/approach/fan
+# replace them). Module-level so the class-body comprehension can see it.
+_DROP_RADIATOR = {"radiator_approach_K", "fan_rated_frac"}
+
 
 @register
 class GTSystemV2DEBackup(GTSystemV2DE):
@@ -47,7 +52,7 @@ class GTSystemV2DEBackup(GTSystemV2DE):
     )
     chart_format = "svg"
 
-    inputs = list(GTSystemV2DE.inputs) + [
+    inputs = [i for i in GTSystemV2DE.inputs if i.key not in _DROP_RADIATOR] + [
         InputSpec("gt_status",   "GT status", "-", 0, 0, 1,
                   choices={"Normal": 0, "Failed → diesel": 1}),
         InputSpec("libr_status", "LiBr status", "-", 0, 0, 1,
@@ -97,8 +102,10 @@ class GTSystemV2DEBackup(GTSystemV2DE):
         if b is None:
             return rows
         ok = lambda flag: " ✓" if flag else " ✗"
+        # Prime mover is surfaced on the PFD (backup note) and via GT actual power;
+        # the stray "= … — 0" divider row was dropped (it read like a 0-value metric).
+        # The cooling-tower fan is already itemised in the plant-aux block above.
         rows += [
-            OutputSpec(f"— Backup: prime mover = {b['prime_mover']} —", 0.0, "", "input", "{:.0f}"),
             OutputSpec("Cooling-tower top-up duty", b["tower_topup_kW"], "kW", "screening", "{:.0f}"),
             OutputSpec(f"Tower supply temp (direct cool{ok(b['tower_direct_ok'])})",
                        b["tower_supply_C"], "°C", "screening", "{:.0f}"),

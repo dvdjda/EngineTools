@@ -71,8 +71,10 @@ class DoubleEffectLiBrChiller(LiBrChiller):
         min_htg_C = self._p("min_htg") - 273.15
 
         # The second effect is the extra cooling beyond a single-effect machine
-        # working off the same generator duty.
-        second_effect_gain = max(0.0, (cop - _SINGLE_EFFECT_COP) * q_gen)
+        # working off the same generator duty. A tripped chiller (Backup engine)
+        # delivers no cooling at all, so there is no second-effect gain.
+        second_effect_gain = (0.0 if self._failed
+                              else max(0.0, (cop - _SINGLE_EFFECT_COP) * q_gen))
 
         self._result("Number of effects",       2.0,            "-",  "input",
                      "double-effect: HTG + LTG, driving heat used twice")

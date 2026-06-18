@@ -195,8 +195,25 @@ def _aux_loads_kW(p, load_pct: float,
              + _pump_kW(q_dist, p.dp_dist_bar, eta)
              + _pump_kW(q_fw,   p.dp_cond_bar, eta))         # condensate ≈ steam mass
 
-    # Dry-cooler fan: VSD cube law on radiator utilisation ≈ bypassed share.
-    fan = p.fan_rated_frac * q_cond * f ** 3
+    # Heat-reject fan. Dry cooler: VSD cube law on radiator utilisation ≈ bypassed
+    # share. Wet cooling tower (Backup engine): the fan rides the loop-trim reject
+    # PLUS the GPU cooling the tower carries directly (top-up when the LiBr is
+    # steam-short on the diesel, or the full GPU heat when the LiBr has tripped).
+    # Mirrors plant_loads so the GT-load setpoint accounts for it and the bus closes.
+    if getattr(p, "heat_reject", "radiator") == "tower":
+        if getattr(p, "libr_failed", False):
+            libr_cool = 0.0
+        else:
+            p_atm   = 101325.0
+            p_st_Pa = p.steam_p_bar * 1e5
+            t_steam = _props.t_sat(p_st_Pa) + 30.0
+            dh_libr = max(_props.h_steam(p_st_Pa, t_steam) - _props.h_sat_liq(p_atm), 1.0)
+            steam_to_libr = total_steam_kgps                     # all steam → LiBr (no split here)
+            libr_cool = min(gpu_heat_kW, p.libr_cop * steam_to_libr * dh_libr / 1e3)
+        topup = max(0.0, gpu_heat_kW - libr_cool)
+        fan   = 0.02 * (q_cond * f ** 3 + topup)                 # _TOWER_FAN_FRAC
+    else:
+        fan = p.fan_rated_frac * q_cond * f ** 3
     # Container-envelope HVAC + lights (IT/ambient driven).
     n_cont = p.containers_per_MW * (p.gpu_it_kW / 1000.0)
     hvac   = max(0.0, n_cont * p.container_area_m2 * p.container_U

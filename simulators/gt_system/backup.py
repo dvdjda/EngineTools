@@ -36,11 +36,16 @@ def resilience(solved, p) -> dict:
     libr_cool = 0.0 if getattr(p, "libr_failed", False) else R(LiBrChiller, "Cooling capacity kW")
 
     # ── cooling tower: top-up (or full, on LiBr failure) ──────────────────────
-    tower_duty   = max(0.0, gpu_heat - libr_cool)            # what the tower must add
+    trim_duty    = R(Radiator, "Radiator duty")             # loop-trim reject (post-MED)
+    tower_duty   = max(0.0, gpu_heat - libr_cool)            # GPU cooling the tower must add
+    tower_total  = trim_duty + tower_duty                    # everything the tower rejects
     tower_sup_C  = p.tower_wetbulb_C + p.tower_approach_K
-    direct_ok    = tower_sup_C <= p.gpu_t_in_C + 1e-6        # can it cool dielectric to set-point?
-    tower_fan_kW = 0.02 * tower_duty
-    tower_makeup = (tower_duty / _H_FG) * 1.3 * 3.6          # m³/h evap + blowdown
+    # "Direct cool" only matters when the tower actually cools the GPU dielectric
+    # (top-up > 0). In normal operation the LiBr cools the GPU and the tower only
+    # trims the reject loop (where 35 °C is plenty), so the check is not applicable.
+    direct_ok    = (tower_duty <= 1e-6) or (tower_sup_C <= p.gpu_t_in_C + 1e-6)
+    tower_fan_kW = 0.02 * tower_total                        # fan rides the total duty
+    tower_makeup = (tower_total / _H_FG) * 1.3 * 3.6         # m³/h evap + blowdown
 
     # ── prime-mover fuel autonomy (a DESIGN metric — always for the backup load,
     # so it stays finite whether or not the diesel is currently running) ───────
