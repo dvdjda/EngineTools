@@ -42,23 +42,22 @@ def resilience(solved, p) -> dict:
     tower_fan_kW = 0.02 * tower_duty
     tower_makeup = (tower_duty / _H_FG) * 1.3 * 3.6          # m³/h evap + blowdown
 
-    # ── prime-mover fuel autonomy ─────────────────────────────────────────────
-    fuel_kW = R(GasTurbine, "Fuel energy input")
-    if on_diesel:
-        fuel_Lph  = fuel_kW * 3600.0 / (_DIESEL_MJ_PER_L * 1000.0)   # kW→L/h
-        autonomy_h = (p.diesel_tank_m3 * 1000.0) / fuel_Lph if fuel_Lph > 0 else float("inf")
-    else:
-        fuel_Lph = 0.0
-        autonomy_h = float("inf")                            # GT on gas, not the diesel tank
+    # ── prime-mover fuel autonomy (a DESIGN metric — always for the backup load,
+    # so it stays finite whether or not the diesel is currently running) ───────
+    from .plant_loads import plant_loads
+    overhead_kW = R(GPUCassette, "Cassette overhead electrical")
+    plant_aux_kW = plant_loads(solved, p)["total"]
+    backup_elec_kW = it_kW + overhead_kW + plant_aux_kW      # what the diesel must carry
+    diesel_fuel_kW = backup_elec_kW / max(p.diesel_eff, 1e-6)
+    fuel_Lph   = diesel_fuel_kW * 3600.0 / (_DIESEL_MJ_PER_L * 1000.0)
+    autonomy_h = (p.diesel_tank_m3 * 1000.0) / fuel_Lph if fuel_Lph > 0 else 0.0
 
-    # ── fresh-water buffer ────────────────────────────────────────────────────
-    med_m3day   = R(MED, "Water production m3/day")
-    draw_m3day  = tower_makeup * 24.0
-    net_m3day   = med_m3day - draw_m3day                     # +ve fills the tank
-    if net_m3day >= 0:
-        water_days = float("inf")
-    else:
-        water_days = p.water_tank_m3 / (-net_m3day)
+    # ── fresh-water buffer (worst case: cooling tower carries the FULL GPU heat
+    # with MED offline — so it's always finite and is the resilience number) ───
+    med_m3day      = R(MED, "Water production m3/day")
+    makeup_full    = (gpu_heat / _H_FG) * 1.3 * 3.6          # m³/h at full-GPU tower duty
+    net_m3day      = med_m3day - tower_makeup * 24.0          # current-scenario net (info)
+    water_days     = p.water_tank_m3 / (makeup_full * 24.0) if makeup_full > 0 else 0.0
 
     # ── UPS electrical ride-through (IT + critical cooling pumps) ─────────────
     crit_kW   = it_kW + 0.10 * it_kW                          # IT + ~10% critical pumps

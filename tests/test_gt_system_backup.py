@@ -72,5 +72,29 @@ def test_tower_direct_cooling_infeasible_at_high_wetbulb(e):
     assert not b["tower_direct_ok"]
 
 
+def test_resilience_kpis_always_finite(e):
+    """Autonomy / water-buffer are backup DESIGN metrics → always finite, even in
+    normal operation (regression: they used to return inf and trip the non-finite
+    output guard / 'balances do not close' alert)."""
+    import math
+    for ov in ({}, {"gt_status": 1}, {"libr_status": 1}):
+        r = e.solve(dict(e.defaults(), operating_mode=1, **ov))
+        for o in e.outputs(r):
+            assert not (isinstance(o.value, float) and math.isinf(o.value)), o.label
+        b = r["resilience"]
+        assert math.isfinite(b["diesel_autonomy_h"])
+        assert math.isfinite(b["water_buffer_days"])
+
+
+def test_backup_cooling_balance_closes_via_tower(e):
+    """In a GT failure the diesel-LiBr alone is short, but the cooling tower
+    top-up closes the cooling balance (feasible), so the run isn't flagged as a
+    non-closing balance."""
+    r = e.solve(dict(e.defaults(), operating_mode=1, gpu_it_kW=1000, gt_status=1))
+    cb = r["feasibility"].by("Cooling capacity")
+    assert cb.feasible and "Cooling-tower top-up" in cb.breakdown
+    assert cb.breakdown["Cooling-tower top-up"] > 0
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

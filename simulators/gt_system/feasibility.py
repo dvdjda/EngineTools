@@ -199,21 +199,35 @@ def power_balance(solved, assumption: str | None = None,
 
 
 def cooling_balance(solved, assumption: str = COOLING_ASSUMPTION) -> ResourceBalance:
-    """Cooling supply/demand. Supply: LiBr Q_cool. Demand: GPU silicon heat
-    + cassette overhead heat. Both dissipate into the immersion coolant."""
+    """Cooling supply/demand. Supply: LiBr Q_cool (+ cooling-tower top-up in the
+    Backup engine). Demand: GPU silicon heat + cassette overhead heat."""
+    from nexablock.blocks import CoolingTowerLoop
     libr = _first(solved, LiBrChiller)
     gpu  = _first(solved, GPUCassette)
 
-    supply_kW   = _read(libr, "Cooling capacity kW")
     silicon_kW  = _read(gpu,  "IT power")
     overhead_kW = _read(gpu,  "Cassette overhead electrical")
     demand_kW   = silicon_kW + overhead_kW
 
+    params      = getattr(solved, "params", None)
+    libr_failed = bool(getattr(params, "libr_failed", False))
+    libr_kW     = 0.0 if libr_failed else _read(libr, "Cooling capacity kW")
+
+    # Backup engine: a wet cooling tower covers any shortfall (top-up), or the
+    # whole GPU heat when the LiBr has failed. It's sized for the full load, so
+    # it closes the HEAT balance; the wet-bulb reject-temperature feasibility is
+    # surfaced separately in the resilience KPIs (Tower supply temp).
+    has_tower   = any(isinstance(b, CoolingTowerLoop) for b in solved.blocks)
+    tower_kW    = max(0.0, demand_kW - libr_kW) if has_tower else 0.0
+    supply_kW   = libr_kW + tower_kW
+
     breakdown = {
-        "LiBr cooling capacity":  supply_kW,
+        "LiBr cooling capacity":  libr_kW,
         "GPU silicon heat":       silicon_kW,
         "Cassette overhead heat": overhead_kW,
     }
+    if has_tower:
+        breakdown["Cooling-tower top-up"] = tower_kW
     return _make("Cooling capacity", "kW", supply_kW, demand_kW,
                  assumption, breakdown, tol_rel=COOLING_TOL_REL)
 
