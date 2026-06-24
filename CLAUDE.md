@@ -25,6 +25,17 @@ nexa_toolkit/
 Two trusted tools start the system: the LiBr absorption chiller and the immersed-GPU
 cassette balance. Use them as worked examples of a good tool.
 
+> **Current tool status (snapshot, 2026-06-24).** This tracks live state, not the
+> rules — the draft→promote gate in §4/§9 is unchanged. The two seed tools above are
+> *worked examples* of the contract and are both currently `draft` pending
+> re-verification (the LiBr tool was renamed **"LiBr-H₂O absorption chiller"** and
+> extended to single + double effect with an optional make-up burner). The only
+> `trusted` engines right now are **GT System v2 — nexablock (… + Backup)** and the
+> **Pipe Simulator (gas pressure drop)**; the base GT System v2, its double-effect
+> (2×LiBr) and load-sweep variants, the GPU cassette, and the LiBr-H₂O absorption
+> chiller are all `draft`. Draft tools run fully — they just carry a draft badge and
+> `unverified` / `screening` bases until David promotes them.
+
 ## 2. Your job
 - Turn a request into a conforming tool. Fill the **scaffold template** - do not invent
   your own architecture or file layout. Uniformity is what makes every tool show up in

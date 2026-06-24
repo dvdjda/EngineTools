@@ -44,3 +44,4 @@ Thumbs.db
 .env
 *.pid
 *.log
+.webui_secret_key

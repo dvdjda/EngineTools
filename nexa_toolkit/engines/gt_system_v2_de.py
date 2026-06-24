@@ -37,7 +37,7 @@ class GTSystemV2DE(GTSystemV2):
     key        = "gt_system_v2_de"
     name       = "GT System v2 — nexablock (GT + HRSG + 2xLiBr + GPU + MED)"
     kind       = "simulator"
-    status     = "trusted"   # promoted by David
+    status     = "draft"   # demoted to draft by David
     provenance = ("Copy of trusted gt_system_v2 rebuilt for a double-effect LiBr "
                   "absorption chiller (2× generators, COP ~1.2, needs ~8-10 bar "
                   "steam). David's request: model the double-effect chiller as a "

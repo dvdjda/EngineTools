@@ -32,7 +32,7 @@ To disable auto-start entirely, `bootout` it and move the plist out of `~/Librar
 When you load the page, the layout is two columns:
 
 **Left column** — inputs panel:
-- **System dropdown** at the top. Pick which engine to run. Defaults to the v2 trusted GT system.
+- **System dropdown** at the top. Pick which engine to run. Each entry carries a **trusted** or **draft** badge. Currently the only trusted GT engine is **GT System v2 — nexablock (… + Backup)**; the base GT System v2, its double-effect (2×LiBr) and load-sweep variants, the GPU cassette and the LiBr-H₂O absorption chiller are **draft** (they run fully, pending re-verification).
 - **Datasets panel** below the dropdown. Save / Update / Load / Delete named snapshots of all the current inputs, per engine. See §6.
 - **Input list** below. Auto-generated from the picked engine's `InputSpec` list. Plain inputs are numeric boxes; categorical inputs (like the mode switches) are dropdowns. For the GT engines a **GT load (kW)** field sits directly under **GT load (%)**, twinned to it (see §3.1).
 - **Run button** at the bottom of the panel.
@@ -48,7 +48,7 @@ When you load the page, the layout is two columns:
 - **Studies card** — Sensitivity, Sweep (1D/2D), Scenarios. See §5.
 - **Results table** — full output list with Quantity / Value / Unit / Basis columns. Basis colour reflects audit coverage (§4.4).
 - **Smart section** — diagnostics + method notes from the engine.
-- **AI Analysis area** — optional LLM-generated narrative (depends on configured model).
+- **AI Analysis area** — optional LLM-generated narrative. The model dropdown lists **22 local Ollama models** (granite4.1, deepseek-r1, gpt-oss, qwen coders, llama, phi4, gemma, vision models — anything in your `ollama list` except embedding-only models) which run fully on-machine via Ollama's OpenAI-compatible endpoint with no API key, plus the Anthropic Claude cloud models. Default is `granite4.1:8b` (local). Local models route to `http://localhost:11434`; everything else goes to Anthropic.
 - **Download row** — Download PDF, Download Excel, plus "Include latest study" checkbox to attach the most recent study chart to the export.
 
 ## 3. The standard workflow
