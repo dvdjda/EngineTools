@@ -44,11 +44,56 @@ NAVY = "#2E4E7E"; TEAL = "#2BB6A3"; LIGHT = "#EAF0F8"; GREY = "#5b6675"
 INK = "#22303F"; BG = "#f4f7fb"; LINE = "#dbe2ee"; RED = "#C0392B"
 BASIS = {"verified": "#2E7D4E", "screening": "#B26A00", "input": "#5b6675", "unverified": RED}
 
-# AI model selector — comprehensive Anthropic Claude model list.
-# Static so the dropdown populates without an API call; if the user wants
-# a model that's launched after this list was written, they can type its
-# ID into the model dropdown (it's `searchable` so freeform values work).
+# AI model selector — local (Ollama) models first, then the comprehensive
+# Anthropic Claude cloud list. Static so the dropdown populates without an
+# API call; if the user wants a model that's launched after this list was
+# written, they can type its ID into the model dropdown (it's `searchable`
+# so freeform values work).
+#
+# Local models run fully on this machine through Ollama's OpenAI-compatible
+# endpoint — nothing leaves the box and no API key is needed. Anything in
+# AI_LOCAL_MODELS is routed to Ollama; everything else goes to Anthropic.
+OLLAMA_BASE_URL = "http://localhost:11434/v1"
+
+# Local Ollama models available on this machine (from `ollama list`). Each entry
+# is (value, label-suffix). Embedding-only models (bge-m3, nomic-embed-text) are
+# intentionally excluded — they can't serve chat completions for the narrative.
+# Vision models (qwen2.5vl, granite3.2-vision, llava) handle text fine too.
+AI_LOCAL_MODEL_DEFS = [
+    ("granite4.1:8b",            "granite4.1:8b — default"),
+    ("granite4.1:30b",          "granite4.1:30b"),
+    ("granite4.1:3b",           "granite4.1:3b"),
+    ("granite4:small-h",        "granite4:small-h"),
+    ("deepseek-r1:32b",         "deepseek-r1:32b — reasoning"),
+    ("deepseek-r1:7b",          "deepseek-r1:7b — reasoning"),
+    ("gpt-oss:20b",             "gpt-oss:20b"),
+    ("qwen3-coder:30b",         "qwen3-coder:30b — coder"),
+    ("qwen2.5-coder:14b",       "qwen2.5-coder:14b — coder"),
+    ("devstral:24b",            "devstral:24b — coder"),
+    ("qwen2.5:7b",              "qwen2.5:7b"),
+    ("qwen2.5:0.5b",            "qwen2.5:0.5b"),
+    ("llama3.1:8b",             "llama3.1:8b"),
+    ("llama3.2:3b",             "llama3.2:3b"),
+    ("phi4:14b",                "phi4:14b"),
+    ("phi4-mini-reasoning:latest", "phi4-mini-reasoning"),
+    ("phi4-mini:latest",        "phi4-mini"),
+    ("gemma2:2b",               "gemma2:2b"),
+    ("qwen2.5vl:32b",           "qwen2.5vl:32b — vision"),
+    ("qwen2.5vl:7b",            "qwen2.5vl:7b — vision"),
+    ("granite3.2-vision:latest", "granite3.2-vision — vision"),
+    ("llava:latest",            "llava — vision"),
+]
+AI_LOCAL_MODELS = {value for value, _ in AI_LOCAL_MODEL_DEFS}
+
+
+def _is_local_model(model: str) -> bool:
+    return (model or "") in AI_LOCAL_MODELS
+
+
 AI_MODELS = [
+    # Local (Ollama) — runs on this machine, no data leaves, no API key
+    *[{"label": f"{label} (local)", "value": value}
+      for value, label in AI_LOCAL_MODEL_DEFS],
     # Claude 4 family
     {"label": "Claude Opus 4.7 (1M context)",       "value": "claude-opus-4-7"},
     {"label": "Claude Opus 4.6",                    "value": "claude-opus-4-6"},
@@ -72,8 +117,9 @@ AI_MODELS = [
     {"label": "Claude 3 Sonnet (2024-02-29)",       "value": "claude-3-sonnet-20240229"},
     {"label": "Claude 3 Haiku (2024-03-07)",        "value": "claude-3-haiku-20240307"},
 ]
-# Default to a smart-and-capable Opus when first opened; user can pick any.
-AI_MODEL_DEFAULT = "claude-sonnet-4-6"
+# Default to the local Ollama model so analysis runs on-machine out of the
+# box with no API key and no data leaving the host; user can pick any.
+AI_MODEL_DEFAULT = "granite4.1:8b"
 
 CARD = {"background": "white", "border": f"1px solid {LINE}", "borderRadius": "10px",
         "padding": "18px 20px", "boxShadow": "0 1px 3px rgba(20,40,80,0.06)"}
@@ -84,6 +130,11 @@ CARD = {"background": "white", "border": f"1px solid {LINE}", "borderRadius": "1
 # engine without them is selected.
 app = dash.Dash(__name__, title="EngineTools", suppress_callback_exceptions=True)
 server = app.server
+
+# Read-only HTTP discovery of the (trusted) tool registry, for the APEX AI surface.
+# Generic — reads the contract; draft tools are never exposed. (apex: ENGINETOOLS_APEX_CONTRACT.md)
+from nexa_toolkit.framework.rest import attach_rest
+attach_rest(server)
 
 
 # ── Markdown docs Flask route ────────────────────────────────────────────────
@@ -701,26 +752,51 @@ def call_ai_narrative(engine, v, r, model=None, api_key=None):
     model_used = None
     err = None
 
-    import os as _os
-    resolved_key = api_key or _os.environ.get("ANTHROPIC_API_KEY")
-    if not resolved_key:
-        return html.Div(
-            "AI Analysis unavailable: no Anthropic API key. Paste your key "
-            "in the AI Analysis card below (it stores in your browser only, "
-            "never on the server) — or export ANTHROPIC_API_KEY in the env "
-            "before starting the app.",
-            style={"fontSize": "12px", "color": RED, "fontStyle": "italic"}), None
+    if _is_local_model(model):
+        # Local Ollama path — OpenAI-compatible endpoint, fully on-machine.
+        # No API key required or used; nothing is sent externally.
+        local_system = (
+            "You are an engineering analysis assistant for a thermal-energy "
+            "process simulator. All numbers are computed externally and given "
+            "to you. Never invent, estimate, or recompute values. State only "
+            "what the provided data supports. Be concise.")
+        try:
+            from openai import OpenAI as _OpenAI
+            client = _OpenAI(base_url=OLLAMA_BASE_URL, api_key="ollama")
+            resp = client.chat.completions.create(
+                model=model, temperature=0.2,
+                messages=[{"role": "system", "content": local_system},
+                          {"role": "user", "content": prompt}])
+            text = resp.choices[0].message.content
+            model_used = f"ollama/{model} (local)"
+        except Exception as e:
+            err = f"{type(e).__name__}: {e}"
+        if text is None:
+            return html.Div(
+                f"Local AI call failed: {err}  —  is the Ollama server running "
+                f"at {OLLAMA_BASE_URL} with the '{model}' model pulled?",
+                style={"fontSize": "12px", "color": RED}), None
+    else:
+        import os as _os
+        resolved_key = api_key or _os.environ.get("ANTHROPIC_API_KEY")
+        if not resolved_key:
+            return html.Div(
+                "AI Analysis unavailable: no Anthropic API key. Paste your key "
+                "in the AI Analysis card below (it stores in your browser only, "
+                "never on the server) — or export ANTHROPIC_API_KEY in the env "
+                "before starting the app.",
+                style={"fontSize": "12px", "color": RED, "fontStyle": "italic"}), None
 
-    try:
-        import anthropic as _ant
-        client = _ant.Anthropic(api_key=resolved_key)
-        msg = client.messages.create(
-            model=model, max_tokens=1400,
-            messages=[{"role": "user", "content": prompt}])
-        text = msg.content[0].text
-        model_used = f"anthropic/{model}"
-    except Exception as e:
-        err = f"{type(e).__name__}: {e}"
+        try:
+            import anthropic as _ant
+            client = _ant.Anthropic(api_key=resolved_key)
+            msg = client.messages.create(
+                model=model, max_tokens=1400,
+                messages=[{"role": "user", "content": prompt}])
+            text = msg.content[0].text
+            model_used = f"anthropic/{model}"
+        except Exception as e:
+            err = f"{type(e).__name__}: {e}"
 
     if text is None:
         return html.Div(
@@ -1469,27 +1545,52 @@ def _ai_key_clear(_n):
     return None
 
 
+_KEY_INPUT_STYLE = {"flex": "1", "fontSize": "12px", "padding": "6px 10px",
+                    "border": f"1px solid {LINE}", "borderRadius": "6px",
+                    "marginRight": "6px"}
+
+
 @app.callback(Output("ai-key-status", "children"),
-              Input("ai-key-store", "data"))
-def _ai_key_status(stored):
-    """Show whether a key is stored and a redacted hint of which one."""
+              Output("ai-key-input", "disabled"),
+              Output("ai-key-input", "style"),
+              Output("b-ai-key-save", "disabled"),
+              Output("b-ai-key-clear", "disabled"),
+              Input("ai-key-store", "data"),
+              Input("ai-model", "value"))
+def _ai_key_status(stored, model):
+    """Show key state, and disable/grey the key controls for local models.
+
+    Local (Ollama) models run on-machine and need no API key, so the key
+    field is greyed out and the 'No API key' warning is suppressed."""
     import os as _os
+    if _is_local_model(model):
+        greyed = {**_KEY_INPUT_STYLE, "background": "#eef1f6",
+                  "color": GREY, "cursor": "not-allowed"}
+        status = html.Span(
+            "Local model — runs on this machine via Ollama. "
+            "No API key needed; no data leaves the machine.",
+            style={"color": "#2E7D4E", "fontWeight": "600"})
+        return status, True, greyed, True, True
+
     if stored:
         # show last 4 chars only — confirms identity without exposing the key
         hint = ("…" + stored[-4:]) if len(stored) > 4 else "…"
-        return html.Span([
+        status = html.Span([
             html.Span("✓ Key stored in browser ",
                        style={"color": "#2E7D4E", "fontWeight": "600"}),
             html.Span(f"({hint})", style={"color": GREY}),
         ])
+        return status, False, _KEY_INPUT_STYLE, False, False
     env_key = _os.environ.get("ANTHROPIC_API_KEY")
     if env_key:
-        return html.Span(
+        status = html.Span(
             "ANTHROPIC_API_KEY found in server env — will be used if no key "
             "is saved here.", style={"color": GREY})
-    return html.Span(
+        return status, False, _KEY_INPUT_STYLE, False, False
+    status = html.Span(
         "No API key. Paste your Anthropic key above and click Save.",
         style={"color": RED})
+    return status, False, _KEY_INPUT_STYLE, False, False
 
 
 # Latest study per engine. Populated by the three study callbacks; read by
