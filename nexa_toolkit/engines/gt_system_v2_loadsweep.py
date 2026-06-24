@@ -28,7 +28,7 @@ _SWEEP_KPIS = [
 class GTSystemV2LoadSweep(GTSystemV2):
     key          = "gt_system_v2_loadsweep"
     name         = "GT System v2 — load sweep screening"
-    status       = "trusted"
+    status       = "draft"   # demoted to draft by David
     chart_format = "png"   # override parent's "svg" — sweep chart is matplotlib PNG
     notes = (
         "Same physics as gt_system_v2 (validated vs the v1 trusted GT tool "

@@ -16,6 +16,7 @@ from ..reporting.charts import NAVY, TEAL, AMBER, GRID, INK
 class GpuCassette(Engine):
     key = "gpu_cassette"
     name = "Immersed-GPU cassette - mass and energy balance"
+    status = "draft"   # demoted to draft by David
     notes = ("Energy balance: heat to remove = electrical power into the cassette "
              "(essentially all IT power becomes heat). Coolant flow from Q = m*cp*dT. "
              "The heat load sets the cooling duty handed to the chiller. Flow figures "

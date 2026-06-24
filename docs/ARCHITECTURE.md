@@ -149,7 +149,7 @@ A v2-on-v1 adapter looks like:
 class GTSystemV2(Engine):
     key          = "gt_system_v2"
     name         = "GT System v2 — nexablock (...)"
-    status       = "trusted"
+    status       = "draft"      # currently draft; the … + Backup variant is the trusted one
     chart_format = "svg"        # tells the UI to render the SVG flowsheet
     inputs       = [InputSpec(...), ...]    # 39 input fields
 

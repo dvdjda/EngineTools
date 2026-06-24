@@ -78,7 +78,8 @@ def make_chart(r, path, dpi=150):
     x_strong = r["x_strong_pct"]
     x_line = r["x_crystallisation_pct"]
     safe = r["cryst_margin_pct"] > 0
-    xlo, xhi = 50, max(x_line, x_strong) + 4
+    # xlo follows the data so single-effect bands (<50% LiBr) aren't clipped.
+    xlo, xhi = min(50, x_strong - 6), max(x_line, x_strong) + 4
     ax2.barh([0], [x_strong], color=NAVY, height=0.5, zorder=3)
     ax2.axvline(x_line, color=RED, lw=2, zorder=4)
     ax2.text(x_line, 0.55, f"crystallisation line  {x_line:.1f}%",

@@ -3,8 +3,8 @@
 A framework, not an app. New systems (desalination, gas turbine, whole plant, ...)
 drop in as engine modules on one common contract. Reporting, UI and the MCP/agent
 exposure are all generic and read that contract, so adding a system is a module,
-not a rebuild. Runs locally (light numerical work, no GPU); heavy LLM reasoning
-stays in the cloud.
+not a rebuild. Runs locally (light numerical work, no GPU); the AI-analysis narrative can run
+on-machine via Ollama (22 local models) or in the Anthropic Claude cloud.
 
 ## Structure
 ```
@@ -12,11 +12,16 @@ nexa_toolkit/
   framework/
     contract.py        InputSpec / OutputSpec / Engine base / REGISTRY
   engines/
-    libr_chiller_engine.py   system 1 - LiBr absorption chiller (cycle)
+    libr_chiller_engine.py   system 1 - LiBr-H2O absorption chiller (single + double
+                             effect switch, optional make-up gas burner, BROAD XII-
+                             calibrated, GT-style SVG PFD, sensitivity/sweep hooks)
     gpu_cassette.py          system 2 - immersed-GPU cassette (load/flow balance)
     __init__.py              importing registers the systems
   engine/
-    libr_chiller.py    raw LiBr physics (CoolProp + ASHRAE/Herold-Klein)
+    libr_chiller.py    raw LiBr physics (CoolProp + ASHRAE/Herold-Klein; OEM-calibrated
+                       single/double-effect cycle + make-up burner)
+  reporting/
+    libr_pfd.py        GT-style SVG process flow diagram for the chiller
   reporting/
     generic_report.py  chart/Excel/PDF/PPTX for ANY engine via the contract
     charts.py          shared chart helpers + LiBr signature chart

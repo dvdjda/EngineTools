@@ -21,7 +21,9 @@ open http://127.0.0.1:8050/               # the EngineTools UI
 ./restart.sh                              # stop + start
 ```
 
-For the v2 trusted GT system, pick **"GT System v2 — nexablock"** in the system dropdown. Defaults already work: hit Run.
+Pick a system in the dropdown — e.g. **"GT System v2 — nexablock (… + Backup)"** (the currently trusted GT variant) or the **"LiBr-H₂O absorption chiller"** (single/double-effect, calibrated to the BROAD XII Non-Electric Chiller OEM datasheet). Defaults already work: hit Run.
+
+> **Tool status (current).** The only `trusted` GT engine is the **… + Backup** variant. The base **GT System v2**, its **double-effect (2×LiBr)** and **load-sweep** variants, and the **GPU cassette** are presently `draft` (pending re-verification); the **LiBr-H₂O absorption chiller** is `draft`. Draft tools run fully — they just carry a draft badge and `unverified` / `screening` bases until David promotes them.
 
 ## The three status layers, summarised
 

@@ -98,7 +98,7 @@ class GTSystemV2(Engine):
     key          = "gt_system_v2"
     name         = "GT System v2 — nexablock (GT + HRSG + LiBr + GPU + MED)"
     kind         = "simulator"
-    status       = "trusted"
+    status       = "draft"   # demoted to draft by David
     provenance   = "v1 GT system migrated onto Nexa Block v2; flowsheet via §7.5 SVG renderer; promoted to trusted after 14/14 ±2% validation pass"
     notes = (
         "Runs the nexablock v2 composition (simulators/gt_system/system.py). "
