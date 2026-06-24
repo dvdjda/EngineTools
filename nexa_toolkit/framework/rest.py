@@ -60,9 +60,29 @@ def attach_rest(server):
         if e is None or getattr(e, "status", "draft") != "trusted":
             return jsonify({"error": "not found or not trusted"}), 404
         cfg = body.get("config") or {}
-        keys = {i.key for i in e.inputs}
-        ignored = [k for k in cfg if k not in keys]
-        values = {**e.defaults(), **{k: v for k, v in cfg.items() if k in keys}}
+        spec_by = {i.key: i for i in e.inputs}
+        ignored = [k for k in cfg if k not in spec_by]
+
+        def _coerce(spec, v):
+            """Defensive: a choice label/partial → its numeric value; a numeric string → a number."""
+            ch = getattr(spec, "choices", None)
+            if ch:
+                if v in ch.values():
+                    return v
+                s = str(v).strip().lower()
+                for lbl, num in ch.items():
+                    if s == str(lbl).lower() or (s and s in str(lbl).lower()):
+                        return num
+                return v
+            if isinstance(v, str):
+                t = v.strip()
+                try:
+                    return int(t) if t.lstrip("+-").isdigit() else float(t)
+                except ValueError:
+                    return v
+            return v
+
+        values = {**e.defaults(), **{k: _coerce(spec_by[k], v) for k, v in cfg.items() if k in spec_by}}
         try:
             result = e.solve(values)
             outs = e.outputs(result)
@@ -70,7 +90,7 @@ def attach_rest(server):
             return jsonify({"error": f"solve failed: {exc}", "simulator_id": e.key}), 422
         return jsonify({
             "simulator_id": e.key, "title": e.name, "status": e.status,
-            "config_used": {k: values[k] for k in keys if k in values},
+            "config_used": {k: values[k] for k in spec_by if k in values},
             "ignored_inputs": ignored,
             "kpis": [{"label": o.label, "value": o.value, "unit": o.unit,
                       "basis": o.basis, "text": o.text()} for o in outs],
